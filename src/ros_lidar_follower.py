@@ -283,7 +283,7 @@ class JetBotController:
     def setup_parameters(self):
         self.INTERSECTION_COOLDOWN = 3.0  # phải qua 3s mới cho phép vào giao lộ mới
         self.MINIMUM_TRAVEL_TIME = 2.0  # Thời gian tối thiểu trước khi xử lý giao lộ (giây)
-        self.start_time = None  # Thời điểm bắt đầu hành trình
+        self.start_time = 0  # Thời điểm bắt đầu hành trình
         self.WIDTH, self.HEIGHT = 300, 300
         self.BASE_SPEED = 0.16
         self.TURN_SPEED = 0.19
