@@ -499,6 +499,7 @@ class JetBotController:
                         # (có thể log nhẹ để debug)
                         rospy.logwarn_throttle(2.0, "Cooldown giao lộ: chưa đủ 5s, bỏ qua trigger.")
                     else:
+                        self.last_intersection_time = now
                         rospy.loginfo("SỰ KIỆN (LiDAR): Phát hiện giao lộ. Dừng ngay lập tức.")
                         self.robot.stop()
                         time.sleep(0.5) # Chờ robot dừng hẳn
@@ -527,6 +528,7 @@ class JetBotController:
                         # (có thể log nhẹ để debug)
                         rospy.logwarn_throttle(2.0, "Cooldown giao lộ: chưa đủ 3s, bỏ qua trigger.")
                     else:
+                        self.last_intersection_time = now
                         # Hành động phòng ngừa: chuyển sang trạng thái đi thẳng vào giao lộ.
                         self._set_state(RobotState.APPROACHING_INTERSECTION)
                         continue # Bắt đầu vòng lặp mới với trạng thái mới
