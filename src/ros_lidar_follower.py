@@ -135,7 +135,7 @@ class JetBotController:
         self.SAFE_ZONE_PERCENT = 0.3
         self.LINE_COLOR_LOWER = np.array([0, 0, 0])
         self.LINE_COLOR_UPPER = np.array([180, 255, 75])
-        self.INTERSECTION_CLEARANCE_DURATION = 2.4
+        self.INTERSECTION_CLEARANCE_DURATION = 4.0
         self.INTERSECTION_APPROACH_DURATION = 0.5
         self.LINE_REACQUIRE_TIMEOUT = 3.0
         self.SCAN_PIXEL_THRESHOLD = 100
