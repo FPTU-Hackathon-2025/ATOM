@@ -283,7 +283,7 @@ class JetBotController:
     def setup_parameters(self):
         self.INTERSECTION_COOLDOWN = 3.0  # phải qua 3s mới cho phép vào giao lộ mới
         self.MINIMUM_TRAVEL_TIME = 2.0  # Thời gian tối thiểu trước khi xử lý giao lộ (giây)
-        self.start_time = 0  # Thời điểm bắt đầu hành trình
+        self.start_time = None  # Thời điểm bắt đầu hành trình
         self.WIDTH, self.HEIGHT = 300, 300
         self.BASE_SPEED = 0.16
         self.TURN_SPEED = 0.19
@@ -484,6 +484,7 @@ class JetBotController:
         rospy.loginfo("Robot đang chờ lệnh. Nhấn Enter để bắt đầu...")
         input()  # Chờ người dùng nhấn Enter
         rospy.loginfo("Hành trình bắt đầu!")
+        self.start_time = rospy.get_time()  # Khởi tạo thời điểm bắt đầu
         self.detector.start_scanning()
         rate = rospy.Rate(20)
 
@@ -531,16 +532,16 @@ class JetBotController:
                     continue
 
                     # Tính toán line center một lần
-                    execution_line_center = self._get_line_center(self.latest_image, self.ROI_Y, self.ROI_H)
-                    lookahead_line_center = self._get_line_center(self.latest_image, self.LOOKAHEAD_ROI_Y,
-                                                                  self.LOOKAHEAD_ROI_H)
+                execution_line_center = self._get_line_center(self.latest_image, self.ROI_Y, self.ROI_H)
+                lookahead_line_center = self._get_line_center(self.latest_image, self.LOOKAHEAD_ROI_Y,
+                                                              self.LOOKAHEAD_ROI_H)
 
-                    if execution_line_center is not None:
-                        self.correct_course(execution_line_center)
-                        node_departed = True
-                    else:
-                        rospy.logwarn("ROI gần không thấy line, tạm dừng an toàn.")
-                        self.robot.stop()
+                if execution_line_center is not None:
+                    self.correct_course(execution_line_center)
+                    node_departed = True
+                else:
+                    rospy.logwarn("ROI gần không thấy line, tạm dừng an toàn.")
+                    self.robot.stop()
 
                 # Kiểm tra thời gian chạy tối thiểu
                 now = rospy.get_time()
