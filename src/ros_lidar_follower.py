@@ -119,13 +119,12 @@ class JetBotController:
         cv2.rectangle(focus_mask, (sx, 0), (ex, h), 255, -1)
 
         final_mask = cv2.bitwise_and(color_mask, focus_mask)
-
         return roi, color_mask, focus_mask, final_mask
 
 
     def _strip4(self, roi_bgr, color_mask, focus_mask, final_mask, label,
                 tile_h=90, tile_w=120):
-        """Ghép 4 ô: ROI | color | focus | final, có nhãn."""
+        """Ghép 4 ô: ROI | color | focus | final (đã resize), kèm nhãn."""
         def to_bgr(img):
             if len(img.shape) == 2:   # mask GRAY -> BGR
                 img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
@@ -149,14 +148,48 @@ class JetBotController:
         cv2.putText(strip, "final", (off + step*3, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (220,220,220), 1, cv2.LINE_AA)
         return strip
 
-    def _paste(self, dst, tile, x, y):
+
+    def _compute_tile_size(self, cols=4, margin=6, max_tile_h=90):
+        """
+        Tính kích thước tile để strip (cols ô) luôn vừa khung WIDTH.
+        Trả về (tile_h, tile_w, margin).
+        """
+        avail_w = self.WIDTH - 2 * margin
+        # đảm bảo >= 40px/ô để vẫn nhìn được
+        tile_w = max(40, avail_w // cols)
+        # tile_h giữ tỉ lệ tùy ý; ở đây lấy ~0.75 * tile_w nhưng không vượt max_tile_h
+        tile_h = min(max_tile_h, int(tile_w * 0.75))
+        return tile_h, tile_w, margin
+
+
+    def _paste_safe(self, dst, tile, x, y):
+        """Dán tile vào dst tại (x,y), tự cắt nếu vượt khung để tránh broadcast error."""
         H, W = dst.shape[:2]
         h, w = tile.shape[:2]
-        if y + h <= H and x + w <= W:
-            dst[y:y+h, x:x+w] = tile
 
+        # Cắt phía trái/trên nếu start < 0
+        if x < 0:
+            tile = tile[:, -x:]
+            w = tile.shape[1]
+            x = 0
+        if y < 0:
+            tile = tile[-y:, :]
+            h = tile.shape[0]
+            y = 0
+
+        # Nằm ngoài khung
+        if x >= W or y >= H:
+            return
+
+        w_fit = min(w, W - x)
+        h_fit = min(h, H - y)
+        if w_fit <= 0 or h_fit <= 0:
+            return
+
+        dst[y:y+h_fit, x:x+w_fit] = tile[0:h_fit, 0:w_fit]
 
     def draw_debug_info(self, image):
+        """Vẽ thông tin gỡ lỗi + 2 strip (mỗi strip 4 ô cạnh nhau) vào debug_frame."""
         if image is None:
             return None
 
@@ -185,30 +218,32 @@ class JetBotController:
             roi1, c1, f1, g1 = self._compute_masks(image, self.ROI_Y, self.ROI_H)
             roi2, c2, f2, g2 = self._compute_masks(image, self.LOOKAHEAD_ROI_Y, self.LOOKAHEAD_ROI_H)
 
-            # Kích thước tile có thể chỉnh nhỏ lại nếu không đủ chỗ
-            tile_h, tile_w = 80, 110
+            # TÍNH KÍCH THƯỚC TILE SAO CHO 4 Ô VỪA KHUNG
+            tile_h, tile_w, pad = self._compute_tile_size(cols=4, margin=6, max_tile_h=80)
+
             strip_main = self._strip4(roi1, c1, f1, g1, "ROI main", tile_h, tile_w)
             strip_look = self._strip4(roi2, c2, f2, g2, "ROI lookahead", tile_h, tile_w)
 
-            pad = 6
-            # Dán vào góc phải, 2 hàng
+            # Dán 2 strip ở góc phải, 2 hàng (có kiểm tra biên)
             x = self.WIDTH - max(strip_main.shape[1], strip_look.shape[1]) - pad
+            x = max(0, x)  # nếu âm, kéo về 0
             y1 = pad
             y2 = y1 + strip_main.shape[0] + pad
 
-            self._paste(debug_frame, strip_main, x, y1)
-            self._paste(debug_frame, strip_look, x, y2)
+            self._paste_safe(debug_frame, strip_main, x, y1)
+            self._paste_safe(debug_frame, strip_look, x, y2)
 
-            # Lưu lại nếu cần debug sâu
+            # (tuỳ chọn) lưu mask cuối để debug
             self._last_final_mask_main = g1
             self._last_final_mask_lookahead = g2
 
         except Exception as e:
-            rospy.logerr(debug_frame, f"mask err: {e}", (10, 40),
+            # ĐÚNG: dùng f-string (hoặc "mask err: %s", str(e))
+            rospy.logerr(f"mask err: {e}")
+            cv2.putText(debug_frame, "mask err", (10, 40),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1, cv2.LINE_AA)
 
         return debug_frame
-
 
 
     def setup_parameters(self):
