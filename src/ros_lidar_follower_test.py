@@ -390,11 +390,25 @@ class JetBotController:
             # TRẠNG THÁI 2: ĐANG TIẾN VÀO GIAO LỘ (APPROACHING_INTERSECTION)
             # ===================================================================
 
-                if time.time() - self.last_detection_time >= 2.0:  # mỗi 3 giây
-                    image_info = self.latest_image
-                    detections = self.detect_with_yolo(image_info)
-                    rospy.loginfo(detections)
-                    self.last_detection_time = time.time()
+                # if time.time() - self.last_detection_time >= 2.0:  # mỗi 3 giây
+                #     image_info = self.latest_image
+                #     detections = self.detect_with_yolo(image_info)
+                #     rospy.loginfo(detections)
+                #     self.last_detection_time = time.time()
+
+            if time.time() - self.last_detection_time >= 2.0:
+                detections = self.detect_with_yolo(self.latest_image)
+
+                # Chỉ log thông tin tổng quan để tránh giữ reference
+                summary = [
+                    {
+                        "class_name": det["class_name"],
+                        "confidence": round(det["confidence"], 2)
+                    } for det in detections
+                ]
+                rospy.loginfo(f"YOLO detections summary: {summary}")
+
+                self.last_detection_time = time.time()
 
             # elif self.current_state == RobotState.APPROACHING_INTERSECTION:
             #     # Đi thẳng một đoạn ngắn để vào trung tâm giao lộ
@@ -447,12 +461,12 @@ class JetBotController:
             # elif self.current_state == RobotState.GOAL_REACHED: 
             #     rospy.loginfo("ĐÃ HOÀN THÀNH NHIỆM VỤ. Dừng hoạt động."); self.robot.stop(); break
 
-            if self.video_writer is not None and self.latest_image is not None:
-                # Lấy ảnh gốc, vẽ thông tin lên, rồi ghi
-                debug_frame = self.draw_debug_info(self.latest_image)
-                self.debugzzz = debug_frame
-                if debug_frame is not None:
-                    self.video_writer.write(debug_frame)
+            # if self.video_writer is not None and self.latest_image is not None:
+            #     # Lấy ảnh gốc, vẽ thông tin lên, rồi ghi
+            #     debug_frame = self.draw_debug_info(self.latest_image)
+            #     self.debugzzz = debug_frame
+            #     if debug_frame is not None:
+            #         self.video_writer.write(debug_frame)
 
             rate.sleep()
         self.cleanup()
