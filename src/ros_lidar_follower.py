@@ -19,6 +19,11 @@ from opposite_detector import SimpleOppositeDetector
 
 from map_navigator import MapNavigator
 
+DOMAIN = "https://hackathon2025-dev.fpt.edu.vn"
+token = "7437f6b784f59029d38b71799c713c72"
+url = f"{DOMAIN}/api/sign-submissions/submit/"
+map_type = "map_z"
+
 class RobotState(Enum):
     WAITING_FOR_LINE = 0
     DRIVING_STRAIGHT = 1
@@ -622,56 +627,26 @@ class JetBotController:
         rospy.loginfo("[STEP 2] Processing data items...")
         for item in data_items:
             if item['class_name'] == 'qr_code':
-                # Code đọc QR thật
-                # box = item['box']; qr_image = self.latest_image[box[1]:box[3], box[0]:box[2]]
-                # decoded = decode(qr_image)
-                # if decoded: qr_data = decoded[0].data.decode('utf-8'); self.publish_data(...)
                 rospy.loginfo("Found QR Code. Publishing data...")
-                self.publish_data({'type': 'QR_CODE', 'value': 'simulated_data_123'})
-
-                # TODO: viết code submit to server
-                # 4.1.3 Cách gửi dữ liệu cho Server
-                # 4.1.3.1 Thông Tin Endpoint
-                # URL: /api/sign-submissions/submit/
-                # Method: POST
-                # Content-Type: application/json
-                # 14
-                # 4.1.3.2 Cấu Trúc Request Body
-                # {
-                #  "text": "Nội dung Symbol đã nhận diện",
-                #  "node_id": "ID của node/vị trí phát hiện Symbol",
-                #  "token": "Token xác thực của đội thi"
-                #  "map_type": “Map đang chạy, VD: map_a, map_b, map_c,
-                # map_z”
-                # }
-                # 4.1.3.3 Response
-                # Thành công (Status Code: 201)
-                # {
-                #  "text": "Nội dung Symbol đã submit",
-                #  "race": 1,
-                #  "node_id": 1,
-                #  "submit_at": "2024-01-20T10:30:00Z",
-                #  "team": "Tên đội thi"
-                #  "Map_type": “Map đã submit lên”
-                # }
-                # Lỗi thường gặp - Token không hợp lệ (Status Code: 401)
-                # {
-                #  "detail": "Invalid token"
-                # }
-                # Lỗi thường gặp - Thiếu trường bắt buộc (Status Code: 400)
-                # {
-                #  "field_name": ["This field is required."]
-                # }
-
-                # response = requests.post(mapUrl, json=data)
-                #
-                # print(response.status_code)
-
+                # TODO: thay text và node_id bằng dữ liệu thực tế
+                body = {
+                    "text": "QR Code",
+                    "node_id": self.current_node_id,
+                    "token": token,
+                    "map_type": map_type
+                }
+                self.publish_data(body)
             elif item['class_name'] == 'math_problem':
                 rospy.loginfo("Found Math Problem. Solving and publishing...")
-                self.publish_data({'type': 'MATH_PROBLEM', 'value': '2+2=4'})
-        
-        
+                # TODO: thay text và node_id bằng dữ liệu thực tế
+                body = {
+                    "text": "1+1=2",
+                    "node_id": self.current_node_id,
+                    "token": token,
+                    "map_type": map_type
+                }
+                self.publish_data(body)
+
         rospy.loginfo("[STEP 3] Lập kế hoạch điều hướng theo bản đồ...")
         # 3. Lập kế hoạch Điều hướng
         final_decision = None
@@ -839,6 +814,19 @@ class JetBotController:
         self.turn_robot(90, update_main_direction=False)
         rospy.loginfo(f"[SCAN] Kết quả: {paths}")
         return paths
+
+    def publish_data(self, body):
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "Python-requests/2.28.1"
+        }
+        try:
+            response = requests.post(url, json=body, headers=headers)
+            response.raise_for_status()  # Raise error for non-200 status codes
+            rospy.loginfo(f"QR Code data submitted successfully. Status code: {response.status_code}")
+        except requests.exceptions.RequestException as e:
+            rospy.logerr(f"Failed to submit QR Code data: {e}")
+
 
 def main():
     rospy.init_node('jetbot_controller_node', anonymous=True)
