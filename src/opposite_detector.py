@@ -122,30 +122,50 @@ class SimpleOppositeDetector:
                 if angle_diff >= self.min_opposite_distance and self.are_opposite(obj1['center_angle'], obj2['center_angle']):
                     opposite_pairs.append({'object1': obj1, 'object2': obj2, 'angle_difference': angle_diff})
         return opposite_pairs
-    
+
     def process_detection(self):
-        if self.latest_scan is None: return
+        """
+        Phiên bản nâng cấp: Phát hiện giao lộ dựa trên 2 flag cố định E–NE (45°) và W–SW (225°)
+        Góc tuyệt đối map = center_angle LiDAR + hướng hiện tại của robot trên map
+        """
+        if self.latest_scan is None:
+            return False
+
         scan = self.latest_scan
         timestamp = rospy.get_time()
+
+        # Lấy tất cả các object từ LiDAR
         all_objects = self.find_all_objects(scan)
-        if len(all_objects) < 2: return
-        
-        opposite_pairs = self.find_opposite_pairs(all_objects)
-        
-        if opposite_pairs:
-            opposite_pairs.sort(key=lambda x: abs(x['angle_difference'] - 180.0))
-            best_pair = opposite_pairs[0]
-            # rospy.loginfo("[%.1f] *** OPPOSITE OBJECTS DETECTED ***", timestamp)
-            # Tạo và gửi tin nhắn
+        if len(all_objects) == 0:
+            return False
+
+        # Góc tuyệt đối của robot trên map (ban đầu E = 0°)
+        robot_map_direction = self.DIRECTIONS[self.current_direction_index].value * 90
+
+        # Tính góc tuyệt đối map của từng object
+        for obj in all_objects:
+            obj['absolute_angle'] = (obj['center_angle'] + robot_map_direction) % 360
+
+        # Flag cố định trên map
+        FLAG_1 = 45  # E–NE
+        FLAG_2 = 225  # W–SW
+        TOLERANCE = 15  # ±15° để nhận diện
+
+        flag1_detected = any(
+            abs((obj['absolute_angle'] - FLAG_1 + 180) % 360 - 180) <= TOLERANCE for obj in all_objects)
+        flag2_detected = any(
+            abs((obj['absolute_angle'] - FLAG_2 + 180) % 360 - 180) <= TOLERANCE for obj in all_objects)
+
+        if flag1_detected and flag2_detected:
+            rospy.loginfo(f"[{timestamp:.2f}] *** GIAO LỘ ĐÃ PHÁT HIỆN (flags E-NE & W-SW) ***")
             notification = {
                 "timestamp": timestamp,
-                "detection_type": 'OPPOSITE_OBJECTS',
-                # ... thông tin chi tiết khác
+                "detection_type": "OPPOSITE_FLAGS",
+                "flags_detected": [FLAG_1, FLAG_2]
             }
-#             self.notification_pub.publish(json.dumps(notification))
+            # self.notification_pub.publish(json.dumps(notification))
             return True
         else:
-            # rospy.loginfo("[%.1f] Found %d objects, but none are opposite", timestamp, len(all_objects))
             return False
 
     def detect_object_in_zone(self, zone_ranges, zone_name):
