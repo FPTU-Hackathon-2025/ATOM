@@ -578,10 +578,10 @@ class JetBotController:
         # cv2.imshow("Color Mask", color_mask)
         # cv2.imshow("Focus Mask", focus_mask)
         # cv2.imshow("Final Mask", final_mask)
-        # cv2.waitKey(1)
+        cv2.waitKey(1)
         
         # Tìm contours trên mặt nạ cuối cùng đã được lọc
-        _, contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         if not contours:
             return None
@@ -803,7 +803,7 @@ class JetBotController:
         roi = image[self.ROI_Y : self.ROI_Y + self.ROI_H, :]
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         mask = cv2.inRange(hsv, self.LINE_COLOR_LOWER, self.LINE_COLOR_UPPER)
-        _img, contours, _hierarchy = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         return bool(contours) and cv2.contourArea(max(contours, key=cv2.contourArea)) > self.SCAN_PIXEL_THRESHOLD
     
     def scan_for_available_paths_proactive(self):
