@@ -5,6 +5,8 @@ import cv2
 import numpy as np
 import time
 import os
+import base64
+
 import struct
 import json
 import math
@@ -12,6 +14,7 @@ from enum import Enum
 import requests
 import threading
 import socket
+import requests
 
 from jetbot import Robot
 import onnxruntime as ort
@@ -383,73 +386,38 @@ class JetBotController:
 
     def detect_with_yolo(self, image):
         """
-        Thực hiện nhận diện đối tượng bằng YOLOv8 và hậu xử lý kết quả đúng cách.
+        Thực hiện nhận diện đối tượng bằng YOLO thông qua API http://103.69.87.125:8000/predict
+        và hậu xử lý kết quả để trả về danh sách detections.
         """
-        if self.yolo_session is None: return []
 
-        original_height, original_width = image.shape[:2]
+        # Chuyển ảnh OpenCV (numpy array) thành buffer JPEG
+        _, buffer = cv2.imencode(".jpg", image)
+        files = {"file": ("image.jpg", buffer.tobytes(), "image/jpeg")}
 
-        img_resized = cv2.resize(image, self.YOLO_INPUT_SIZE)
-        img_data = np.array(img_resized, dtype=np.float32) / 255.0
-        img_data = np.transpose(img_data, (2, 0, 1))  # HWC to CHW
-        input_tensor = np.expand_dims(img_data, axis=0)  # Add batch dimension
-
-        input_name = self.yolo_session.get_inputs()[0].name
-        outputs = self.yolo_session.run(None, {input_name: input_tensor})
-
-        # Lấy output thô, output của YOLOv8 thường có shape (1, 84, 8400) hoặc tương tự
-        # Chúng ta cần transpose nó thành (1, 8400, 84) để dễ xử lý
-        predictions = np.squeeze(outputs[0]).T
-
-        # Lọc các box có điểm tin cậy (objectness score) thấp
-        # Cột 4 trong predictions là điểm tin cậy tổng thể của box
-        scores = np.max(predictions[:, 4:], axis=1)
-        predictions = predictions[scores > self.YOLO_CONF_THRESHOLD, :]
-        scores = scores[scores > self.YOLO_CONF_THRESHOLD]
-
-        if predictions.shape[0] == 0:
-            rospy.loginfo("YOLO không phát hiện đối tượng nào vượt ngưỡng tin cậy.")
+        try:
+            response = requests.post("http://103.69.87.125:8000/predict", files=files, timeout=10)
+            response.raise_for_status()
+        except requests.RequestException as e:
+            rospy.logerr(f"Lỗi khi gọi API YOLO: {e}")
             return []
 
-        # Lấy class_id có điểm cao nhất
-        class_ids = np.argmax(predictions[:, 4:], axis=1)
+        data = response.json()
 
-        # Lấy tọa độ box và chuyển đổi về ảnh gốc
-        x, y, w, h = predictions[:, 0], predictions[:, 1], predictions[:, 2], predictions[:, 3]
-        
-        # Tính toán tỷ lệ scale để chuyển đổi tọa độ
-        x_scale = original_width / self.YOLO_INPUT_SIZE[0]
-        y_scale = original_height / self.YOLO_INPUT_SIZE[1]
-
-        # Chuyển từ [center_x, center_y, width, height] sang [x1, y1, x2, y2]
-        x1 = (x - w / 2) * x_scale
-        y1 = (y - h / 2) * y_scale
-        x2 = (x + w / 2) * x_scale
-        y2 = (y + h / 2) * y_scale
-        
-        # Chuyển thành list các box và scores
-        boxes = np.column_stack((x1, y1, x2, y2)).tolist()
-        
-        # 4. Thực hiện Non-Maximum Suppression (NMS)
-        # Đây là một bước cực kỳ quan trọng để loại bỏ các box trùng lặp
-        # OpenCV cung cấp một hàm NMS hiệu quả
-        nms_threshold = 0.45 # Ngưỡng IOU để loại bỏ box
-        indices = self.numpy_nms(np.array(boxes), scores, nms_threshold)
-        
-        if len(indices) == 0:
-            rospy.loginfo("YOLO: Sau NMS, không còn đối tượng nào.")
-            return []
-
-        # 5. Tạo danh sách kết quả cuối cùng
         final_detections = []
-        for i in indices.flatten():
-            final_detections.append({
-                'class_name': self.YOLO_CLASS_NAMES[class_ids[i]],
-                'confidence': float(scores[i]),
-                'box': [int(coord) for coord in boxes[i]] # Chuyển tọa độ sang int
-            })
+        if "boxes" in data:
+            for box in data["boxes"]:
+                final_detections.append({
+                    "class_name": box["class_name"],
+                    "confidence": float(box["confidence"]),
+                    "box": [
+                        int(box["x1"]),
+                        int(box["y1"]),
+                        int(box["x2"] - box["x1"]),  # width
+                        int(box["y2"] - box["y1"])   # height
+                    ]
+                })
 
-        rospy.loginfo(f"YOLO đã phát hiện {len(final_detections)} đối tượng cuối cùng.")
+        rospy.loginfo(f"YOLO đã phát hiện {len(final_detections)} đối tượng cuối cùng từ API.")
         return final_detections
 
     def initialize_mqtt(self):
