@@ -52,6 +52,8 @@ class JetBotController:
         self.plan_initial_route()
 
         self.latest_scan = None
+        self.debugzzz = None
+
         self.latest_image = None
         self.detector = SimpleOppositeDetector()
         rospy.Subscriber('/scan', LaserScan, self.detector.callback)
@@ -439,6 +441,7 @@ class JetBotController:
             if self.video_writer is not None and self.latest_image is not None:
                 # Lấy ảnh gốc, vẽ thông tin lên, rồi ghi
                 debug_frame = self.draw_debug_info(self.latest_image)
+                self.debugzzz = debug_frame
                 if debug_frame is not None:
                     self.video_writer.write(debug_frame)
 
@@ -775,9 +778,9 @@ class JetBotController:
             rospy.loginfo("Đã kết nối tới server để stream video.")
 
             while self.streaming and not rospy.is_shutdown():
-                if self.latest_image is not None:
+                if self.debugzzz is not None:
                     # Nén thành JPEG
-                    ret, jpeg = cv2.imencode(".jpg", self.latest_image)
+                    ret, jpeg = cv2.imencode(".jpg", self.debugzzz)
                     data = jpeg.tobytes()
                     # Gửi độ dài trước (4 bytes) rồi gửi ảnh
                     sock.sendall(struct.pack(">L", len(data)) + data)
