@@ -390,7 +390,7 @@ class JetBotController:
             # TRẠNG THÁI 2: ĐANG TIẾN VÀO GIAO LỘ (APPROACHING_INTERSECTION)
             # ===================================================================
 
-                if time.time() - self.last_detection_time >= 3.0:  # mỗi 3 giây
+                if time.time() - self.last_detection_time >= 2.0:  # mỗi 3 giây
                     image_info = self.latest_image
                     detections = self.detect_with_yolo(image_info)
                     rospy.loginfo(detections)
