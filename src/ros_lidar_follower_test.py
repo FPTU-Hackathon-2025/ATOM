@@ -396,19 +396,19 @@ class JetBotController:
                 #     rospy.loginfo(detections)
                 #     self.last_detection_time = time.time()
 
-            if time.time() - self.last_detection_time >= 2.0:
-                detections = self.detect_with_yolo(self.latest_image)
-
-                # Chỉ log thông tin tổng quan để tránh giữ reference
-                summary = [
-                    {
-                        "class_name": det["class_name"],
-                        "confidence": round(det["confidence"], 2)
-                    } for det in detections
-                ]
-                rospy.loginfo(f"YOLO detections summary: {summary}")
-
-                self.last_detection_time = time.time()
+            # if time.time() - self.last_detection_time >= 2.0:
+            #     detections = self.detect_with_yolo(self.latest_image)
+            #
+            #     # Chỉ log thông tin tổng quan để tránh giữ reference
+            #     summary = [
+            #         {
+            #             "class_name": det["class_name"],
+            #             "confidence": round(det["confidence"], 2)
+            #         } for det in detections
+            #     ]
+            #     rospy.loginfo(f"YOLO detections summary: {summary}")
+            #
+            #     self.last_detection_time = time.time()
 
             # elif self.current_state == RobotState.APPROACHING_INTERSECTION:
             #     # Đi thẳng một đoạn ngắn để vào trung tâm giao lộ
