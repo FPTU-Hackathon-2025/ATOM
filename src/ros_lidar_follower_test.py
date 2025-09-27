@@ -389,11 +389,10 @@ class JetBotController:
             # ===================================================================
 
 
-                while True:
-                    image_info = self.latest_image
-                    detections = self.detect_with_yolo(image_info)
-                    rospy.loginfo(detections)
-                    time.sleep(0.1)
+                image_info = self.latest_image
+                detections = self.detect_with_yolo(image_info)
+                rospy.loginfo(detections)
+                # time.sleep(0.1)
 
 
             # elif self.current_state == RobotState.APPROACHING_INTERSECTION:
@@ -414,38 +413,38 @@ class JetBotController:
             #             self._set_state(RobotState.HANDLING_EVENT)
             #             self.handle_intersection()
 
-            # ===================================================================
-            # TRẠNG THÁI 3: ĐANG RỜI KHỎI GIAO LỘ (LEAVING_INTERSECTION)
-            # ===================================================================
-            elif self.current_state == RobotState.LEAVING_INTERSECTION:
-                self.robot.set_motors(self.BASE_SPEED, self.BASE_SPEED)
-                if rospy.get_time() - self.state_change_time > self.INTERSECTION_CLEARANCE_DURATION:
-                    rospy.loginfo("Đã thoát khỏi khu vực giao lộ. Bắt đầu tìm kiếm line mới.")
-                    self._set_state(RobotState.REACQUIRING_LINE)
+            # # ===================================================================
+            # # TRẠNG THÁI 3: ĐANG RỜI KHỎI GIAO LỘ (LEAVING_INTERSECTION)
+            # # ===================================================================
+            # elif self.current_state == RobotState.LEAVING_INTERSECTION:
+            #     self.robot.set_motors(self.BASE_SPEED, self.BASE_SPEED)
+            #     if rospy.get_time() - self.state_change_time > self.INTERSECTION_CLEARANCE_DURATION:
+            #         rospy.loginfo("Đã thoát khỏi khu vực giao lộ. Bắt đầu tìm kiếm line mới.")
+            #         self._set_state(RobotState.REACQUIRING_LINE)
             
-            # ===================================================================
-            # TRẠNG THÁI 4: ĐANG TÌM LẠI LINE (REACQUIRING_LINE)
-            # ===================================================================
-            elif self.current_state == RobotState.REACQUIRING_LINE:
-                self.robot.set_motors(self.BASE_SPEED, self.BASE_SPEED)
-                line_center_x = self._get_line_center(self.latest_image, self.ROI_Y, self.ROI_H)
+            # # ===================================================================
+            # # TRẠNG THÁI 4: ĐANG TÌM LẠI LINE (REACQUIRING_LINE)
+            # # ===================================================================
+            # elif self.current_state == RobotState.REACQUIRING_LINE:
+            #     self.robot.set_motors(self.BASE_SPEED, self.BASE_SPEED)
+            #     line_center_x = self._get_line_center(self.latest_image, self.ROI_Y, self.ROI_H)
                 
-                if line_center_x is not None:
-                    rospy.loginfo("Đã tìm thấy line mới! Chuyển sang chế độ bám line.")
-                    self._set_state(RobotState.DRIVING_STRAIGHT)
-                    continue
+            #     if line_center_x is not None:
+            #         rospy.loginfo("Đã tìm thấy line mới! Chuyển sang chế độ bám line.")
+            #         self._set_state(RobotState.DRIVING_STRAIGHT)
+            #         continue
                 
-                if rospy.get_time() - self.state_change_time > self.LINE_REACQUIRE_TIMEOUT:
-                    rospy.logerr("Không thể tìm thấy line mới sau khi rời giao lộ. Dừng lại.")
-                    self._set_state(RobotState.DEAD_END)
+            #     if rospy.get_time() - self.state_change_time > self.LINE_REACQUIRE_TIMEOUT:
+            #         rospy.logerr("Không thể tìm thấy line mới sau khi rời giao lộ. Dừng lại.")
+            #         self._set_state(RobotState.DEAD_END)
 
-            # ===================================================================
-            # TRẠNG THÁI KẾT THÚC (DEAD_END, GOAL_REACHED)
-            # ===================================================================
-            elif self.current_state == RobotState.DEAD_END:
-                rospy.logwarn("Đã vào ngõ cụt hoặc gặp lỗi không thể phục hồi. Dừng hoạt động."); self.robot.stop(); break
-            elif self.current_state == RobotState.GOAL_REACHED: 
-                rospy.loginfo("ĐÃ HOÀN THÀNH NHIỆM VỤ. Dừng hoạt động."); self.robot.stop(); break
+            # # ===================================================================
+            # # TRẠNG THÁI KẾT THÚC (DEAD_END, GOAL_REACHED)
+            # # ===================================================================
+            # elif self.current_state == RobotState.DEAD_END:
+            #     rospy.logwarn("Đã vào ngõ cụt hoặc gặp lỗi không thể phục hồi. Dừng hoạt động."); self.robot.stop(); break
+            # elif self.current_state == RobotState.GOAL_REACHED: 
+            #     rospy.loginfo("ĐÃ HOÀN THÀNH NHIỆM VỤ. Dừng hoạt động."); self.robot.stop(); break
 
             if self.video_writer is not None and self.latest_image is not None:
                 # Lấy ảnh gốc, vẽ thông tin lên, rồi ghi
