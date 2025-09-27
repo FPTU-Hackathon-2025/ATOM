@@ -5,10 +5,13 @@ import cv2
 import numpy as np
 import time
 import os
+import struct
 import json
 import math
 from enum import Enum
 import requests
+import threading
+import socket
 
 from jetbot import Robot
 import onnxruntime as ort
@@ -35,6 +38,7 @@ class Direction(Enum):
 class JetBotController:
     def __init__(self):
         rospy.loginfo("Đang khởi tạo JetBot Event-Driven Controller...")
+        self.last_intersection_time = -1e9  # cho phép lần đầu ngay lập tức
         self.setup_parameters()
         self.initialize_hardware()
         self.initialize_yolo()
@@ -49,6 +53,7 @@ class JetBotController:
         self.planned_path = None
         self.banned_edges = []
         self.plan_initial_route()
+        self.debugzzz = None
 
         self.latest_scan = None
         self.latest_image = None
@@ -58,6 +63,13 @@ class JetBotController:
         rospy.loginfo("Đã đăng ký vào các topic /scan và /csi_cam_0/image_raw.")
         self.state_change_time = rospy.get_time()
         self._set_state(RobotState.WAITING_FOR_LINE, initial=True)
+
+        self.streaming = True
+        self.server_ip = "10.34.181.110"
+        self.server_port = 6628
+        threading.Thread(target=self.stream_socket, daemon=True).start()
+
+
         rospy.loginfo("Khởi tạo hoàn tất. Sẵn sàng hoạt động.")
 
     def plan_initial_route(self): 
@@ -93,37 +105,186 @@ class JetBotController:
             rospy.logerr(f"Lỗi khi khởi tạo VideoWriter: {e}")
             self.video_writer = None
 
+    def _compute_masks(self, image, roi_y, roi_h):
+        roi = image[roi_y: roi_y + roi_h, :]
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        H, S, V = cv2.split(hsv)
+
+        # --- 0) Ngưỡng động theo percentile để chịu đựng thay đổi ánh sáng ---
+        v_dark = int(np.clip(np.percentile(V, 25), 60, 130))   # “tối” tương đối
+        s_lo   = 90                                            # đen thường có bão hòa thấp-vừa
+
+        # --- 1) Mask tối (HSV) ---
+        hsv_dark = cv2.inRange(hsv,
+                            np.array([0,   0,     0], dtype=np.uint8),
+                            np.array([179, s_lo, v_dark], dtype=np.uint8))
+
+        # --- 2) Adaptive threshold (grayscale, đảo) để giữ đường trong nền sáng ---
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        # làm mượt nhẹ để bớt noise muối tiêu
+        gray_blur = cv2.medianBlur(gray, 3)
+        # ngưỡng thích nghi (ô 15x15; C=5 điều chỉnh lệch)
+        bin_inv = cv2.adaptiveThreshold(
+            gray_blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV, 15, 5
+        )
+
+        # --- 3) Khử đốm loé (specular): S rất thấp & V rất cao -> gần trắng bóng ---
+        specular = cv2.inRange(hsv,
+                            np.array([0,   0,   200], dtype=np.uint8),
+                            np.array([179, 35, 255], dtype=np.uint8))
+        specular = cv2.medianBlur(specular, 3)
+
+        # --- 4) Hợp nhất & khử loé ---
+        color_mask = hsv_dark
+        focus_mask = np.zeros_like(color_mask)
+        h, w = focus_mask.shape
+        center_w = int(w * self.ROI_CENTER_WIDTH_PERCENT)
+        sx = (w - center_w) // 2
+        ex = sx + center_w
+        cv2.rectangle(focus_mask, (sx, 0), (ex, h), 255, -1)
+
+        # final = (đen theo HSV  OR  đen theo adaptive)  AND  focus  AND  NOT specular
+        final_mask = cv2.bitwise_or(color_mask, bin_inv)
+        final_mask = cv2.bitwise_and(final_mask, focus_mask)
+        final_mask = cv2.bitwise_and(final_mask, cv2.bitwise_not(specular))
+
+        # --- 5) Hình thái học để liền nét & bớt răng cưa ---
+        k = np.ones((3,3), np.uint8)
+        final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_CLOSE, k, iterations=1)
+        final_mask = cv2.medianBlur(final_mask, 3)
+
+        return roi, color_mask, focus_mask, final_mask
+
+    def _strip4(self, roi_bgr, color_mask, focus_mask, final_mask, label,
+                tile_h=90, tile_w=120):
+        """Ghép 4 ô: ROI | color | focus | final (đã resize), kèm nhãn."""
+        def to_bgr(img):
+            if len(img.shape) == 2:   # mask GRAY -> BGR
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+            return cv2.resize(img, (tile_w, tile_h), interpolation=cv2.INTER_AREA)
+
+        t_roi   = to_bgr(roi_bgr)
+        t_color = to_bgr(color_mask)
+        t_focus = to_bgr(focus_mask)
+        t_final = to_bgr(final_mask)
+
+        strip = cv2.hconcat([t_roi, t_color, t_focus, t_final])
+
+        # Nhãn tổng
+        cv2.putText(strip, label, (6, tile_h - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1, cv2.LINE_AA)
+        # Nhãn từng ô
+        off = 5; step = tile_w
+        cv2.putText(strip, "roi",   (off + step*0, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (220,220,220), 1, cv2.LINE_AA)
+        cv2.putText(strip, "color", (off + step*1, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (220,220,220), 1, cv2.LINE_AA)
+        cv2.putText(strip, "focus", (off + step*2, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (220,220,220), 1, cv2.LINE_AA)
+        cv2.putText(strip, "final", (off + step*3, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (220,220,220), 1, cv2.LINE_AA)
+        return strip
+
+
+    def _compute_tile_size(self, cols=4, margin=6, max_tile_h=90):
+        """
+        Tính kích thước tile để strip (cols ô) luôn vừa khung WIDTH.
+        Trả về (tile_h, tile_w, margin).
+        """
+        avail_w = self.WIDTH - 2 * margin
+        # đảm bảo >= 40px/ô để vẫn nhìn được
+        tile_w = max(40, avail_w // cols)
+        # tile_h giữ tỉ lệ tùy ý; ở đây lấy ~0.75 * tile_w nhưng không vượt max_tile_h
+        tile_h = min(max_tile_h, int(tile_w * 0.75))
+        return tile_h, tile_w, margin
+
+
+    def _paste_safe(self, dst, tile, x, y):
+        """Dán tile vào dst tại (x,y), tự cắt nếu vượt khung để tránh broadcast error."""
+        H, W = dst.shape[:2]
+        h, w = tile.shape[:2]
+
+        # Cắt phía trái/trên nếu start < 0
+        if x < 0:
+            tile = tile[:, -x:]
+            w = tile.shape[1]
+            x = 0
+        if y < 0:
+            tile = tile[-y:, :]
+            h = tile.shape[0]
+            y = 0
+
+        # Nằm ngoài khung
+        if x >= W or y >= H:
+            return
+
+        w_fit = min(w, W - x)
+        h_fit = min(h, H - y)
+        if w_fit <= 0 or h_fit <= 0:
+            return
+
+        dst[y:y+h_fit, x:x+w_fit] = tile[0:h_fit, 0:w_fit]
+
     def draw_debug_info(self, image):
-        """Vẽ các thông tin gỡ lỗi lên một khung hình."""
+        """Vẽ thông tin gỡ lỗi + 2 strip (mỗi strip 4 ô cạnh nhau) vào debug_frame."""
         if image is None:
             return None
-        
-        debug_frame = image.copy()
-        
-        # 1. Vẽ các ROI
-        # ROI Chính (màu xanh lá)
-        cv2.rectangle(debug_frame, (0, self.ROI_Y), (self.WIDTH-1, self.ROI_Y + self.ROI_H), (0, 255, 0), 1)
-        # ROI Dự báo (màu vàng)
-        cv2.rectangle(debug_frame, (0, self.LOOKAHEAD_ROI_Y), (self.WIDTH-1, self.LOOKAHEAD_ROI_Y + self.LOOKAHEAD_ROI_H), (0, 255, 255), 1)
 
-        # 2. Vẽ trạng thái hiện tại
-        state_text = f"State: {self.current_state.name}"
-        cv2.putText(debug_frame, state_text, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-        
-        # 3. Vẽ line và trọng tâm (nếu robot đang bám line)
+        debug_frame = image.copy()
+
+        # Vẽ khung 2 ROI
+        cv2.rectangle(debug_frame, (0, self.ROI_Y),
+                    (self.WIDTH-1, self.ROI_Y + self.ROI_H), (0, 255, 0), 1)
+        cv2.rectangle(debug_frame, (0, self.LOOKAHEAD_ROI_Y),
+                    (self.WIDTH-1, self.LOOKAHEAD_ROI_Y + self.LOOKAHEAD_ROI_H), (0, 255, 255), 1)
+
+        # State text
+        st = f"State: {self.current_state.name if self.current_state else 'N/A'}"
+        cv2.putText(debug_frame, st, (10, 20), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5, (255, 255, 255), 1, cv2.LINE_AA)
+
+        # Vẽ line center ở ROI chính (nếu đang bám line)
         if self.current_state == RobotState.DRIVING_STRAIGHT:
-            # Lấy line center của ROI Chính
-            line_center = self._get_line_center(image, self.ROI_Y, self.ROI_H)
-            if line_center is not None:
-                # Vẽ một đường thẳng đứng màu đỏ tại vị trí trọng tâm
-                cv2.line(debug_frame, (line_center, self.ROI_Y), (line_center, self.ROI_Y + self.ROI_H), (0, 0, 255), 2)
+            lc = self._get_line_center(image, self.ROI_Y, self.ROI_H)
+            if lc is not None:
+                cv2.line(debug_frame, (lc, self.ROI_Y),
+                        (lc, self.ROI_Y + self.ROI_H), (0, 0, 255), 2)
+
+        # === Tạo 2 strip (mỗi strip gồm 4 ô cạnh nhau) ===
+        try:
+            roi1, c1, f1, g1 = self._compute_masks(image, self.ROI_Y, self.ROI_H)
+            roi2, c2, f2, g2 = self._compute_masks(image, self.LOOKAHEAD_ROI_Y, self.LOOKAHEAD_ROI_H)
+
+            # TÍNH KÍCH THƯỚC TILE SAO CHO 4 Ô VỪA KHUNG
+            tile_h, tile_w, pad = self._compute_tile_size(cols=4, margin=6, max_tile_h=80)
+
+            strip_main = self._strip4(roi1, c1, f1, g1, "ROI main", tile_h, tile_w)
+            strip_look = self._strip4(roi2, c2, f2, g2, "ROI lookahead", tile_h, tile_w)
+
+            # Dán 2 strip ở góc phải, 2 hàng (có kiểm tra biên)
+            x = self.WIDTH - max(strip_main.shape[1], strip_look.shape[1]) - pad
+            x = max(0, x)  # nếu âm, kéo về 0
+            y1 = pad
+            y2 = y1 + strip_main.shape[0] + pad
+
+            self._paste_safe(debug_frame, strip_main, x, y1)
+            self._paste_safe(debug_frame, strip_look, x, y2)
+
+            # (tuỳ chọn) lưu mask cuối để debug
+            self._last_final_mask_main = g1
+            self._last_final_mask_lookahead = g2
+
+        except Exception as e:
+            # ĐÚNG: dùng f-string (hoặc "mask err: %s", str(e))
+            rospy.logerr(f"mask err: {e}")
+            cv2.putText(debug_frame, "mask err", (10, 40),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1, cv2.LINE_AA)
 
         return debug_frame
 
+
     def setup_parameters(self):
+        self.INTERSECTION_COOLDOWN = 3.0  # phải qua 3s mới cho phép vào giao lộ mới
         self.WIDTH, self.HEIGHT = 300, 300
         self.BASE_SPEED = 0.16
-        self.TURN_SPEED = 0.2
+        self.TURN_SPEED = 0.19
         self.TURN_DURATION_90_DEG = 0.8
         self.ROI_Y = int(self.HEIGHT * 0.85)
         self.ROI_H = int(self.HEIGHT * 0.15)
@@ -134,8 +295,8 @@ class JetBotController:
         self.CORRECTION_GAIN = 0.5
         self.SAFE_ZONE_PERCENT = 0.3
         self.LINE_COLOR_LOWER = np.array([0, 0, 0])
-        self.LINE_COLOR_UPPER = np.array([180, 255, 75])
-        self.INTERSECTION_CLEARANCE_DURATION = 1.5
+        self.LINE_COLOR_UPPER = np.array([180, 255, 95])
+        self.INTERSECTION_CLEARANCE_DURATION = 1
         self.INTERSECTION_APPROACH_DURATION = 0.5
         self.LINE_REACQUIRE_TIMEOUT = 3.0
         self.SCAN_PIXEL_THRESHOLD = 100
@@ -364,21 +525,27 @@ class JetBotController:
                 # --- BƯỚC 1: KIỂM TRA TÍN HIỆU ƯU TIÊN CAO (LiDAR) ---
                 # Đây là tín hiệu đáng tin cậy nhất, nếu nó kích hoạt, xử lý ngay.
                 if self.detector.process_detection():
-                    rospy.loginfo("SỰ KIỆN (LiDAR): Phát hiện giao lộ. Dừng ngay lập tức.")
-                    self.robot.stop()
-                    time.sleep(0.5) # Chờ robot dừng hẳn
-
-                    # Cập nhật vị trí hiện tại (đã đến đích) và xử lý
-                    self.current_node_id = self.target_node_id
-                    rospy.loginfo(f"==> ĐÃ ĐẾN node {self.current_node_id}.")
-
-                    if self.current_node_id == self.navigator.end_node:
-                        rospy.loginfo("ĐÃ ĐẾN ĐÍCH CUỐI CÙNG!")
-                        self._set_state(RobotState.GOAL_REACHED)
+                    now = rospy.get_time()
+                    if (now - self.last_intersection_time) < self.INTERSECTION_COOLDOWN:
+                        # Chưa đủ 3s -> bỏ qua trigger, tiếp tục bám line
+                        # (có thể log nhẹ để debug)
+                        rospy.logwarn_throttle(2.0, "Cooldown giao lộ: chưa đủ 3s, bỏ qua trigger.")
                     else:
-                        self._set_state(RobotState.HANDLING_EVENT)
-                        self.handle_intersection()
-                    continue # Bắt đầu vòng lặp mới với trạng thái mới
+                        rospy.loginfo("SỰ KIỆN (LiDAR): Phát hiện giao lộ. Dừng ngay lập tức.")
+                        self.robot.stop()
+                        time.sleep(0.5) # Chờ robot dừng hẳn
+
+                        # Cập nhật vị trí hiện tại (đã đến đích) và xử lý
+                        self.current_node_id = self.target_node_id
+                        rospy.loginfo(f"==> ĐÃ ĐẾN node {self.current_node_id}.")
+
+                        if self.current_node_id == self.navigator.end_node:
+                            rospy.loginfo("ĐÃ ĐẾN ĐÍCH CUỐI CÙNG!")
+                            self._set_state(RobotState.GOAL_REACHED)
+                        else:
+                            self._set_state(RobotState.HANDLING_EVENT)
+                            self.handle_intersection()
+                        continue # Bắt đầu vòng lặp mới với trạng thái mới
 
                 # --- BƯỚC 2: LOGIC "NHÌN XA HƠN" VỚI ROI DỰ BÁO ---
                 # Nếu LiDAR im lặng, kiểm tra xem vạch kẻ có sắp biến mất ở phía xa không.
@@ -386,9 +553,15 @@ class JetBotController:
 
                 if lookahead_line_center is None:
                     rospy.logwarn("SỰ KIỆN (Dự báo): Vạch kẻ đường biến mất ở phía xa. Chuẩn bị vào giao lộ.")
-                    # Hành động phòng ngừa: chuyển sang trạng thái đi thẳng vào giao lộ.
-                    self._set_state(RobotState.APPROACHING_INTERSECTION)
-                    continue # Bắt đầu vòng lặp mới với trạng thái mới
+                    now = rospy.get_time()
+                    if (now - self.last_intersection_time) < self.INTERSECTION_COOLDOWN:
+                        # Chưa đủ 3s -> bỏ qua trigger, tiếp tục bám line
+                        # (có thể log nhẹ để debug)
+                        rospy.logwarn_throttle(2.0, "Cooldown giao lộ: chưa đủ 3s, bỏ qua trigger.")
+                    else:
+                        # Hành động phòng ngừa: chuyển sang trạng thái đi thẳng vào giao lộ.
+                        self._set_state(RobotState.APPROACHING_INTERSECTION)
+                        continue # Bắt đầu vòng lặp mới với trạng thái mới
 
                 # --- BƯỚC 3: BÁM LINE BÌNH THƯỜNG (NẾU PHÍA TRƯỚC AN TOÀN) ---
                 # Chỉ khi cả LiDAR và ROI Dự báo đều ổn, ta mới thực hiện bám line.
@@ -461,7 +634,13 @@ class JetBotController:
                 self.robot.stop()
                 break
 
-            self._record_frame()
+            if self.video_writer is not None and self.latest_image is not None:
+                # Lấy ảnh gốc, vẽ thông tin lên, rồi ghi
+                debug_frame = self.draw_debug_info(self.latest_image)
+                self.debugzzz = debug_frame
+                if debug_frame is not None:
+                    self.video_writer.write(debug_frame)
+
 
             rate.sleep()
         self.cleanup()
@@ -561,7 +740,7 @@ class JetBotController:
         # cv2.imshow("Color Mask", color_mask)
         # cv2.imshow("Focus Mask", focus_mask)
         # cv2.imshow("Final Mask", final_mask)
-        # cv2.waitKey(1)
+        cv2.waitKey(1)
         
         # Tìm contours trên mặt nạ cuối cùng đã được lọc
         _, contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -805,6 +984,25 @@ class JetBotController:
         self.turn_robot(90, update_main_direction=False)
         rospy.loginfo(f"[SCAN] Kết quả: {paths}")
         return paths
+
+    def stream_socket(self):
+        """Gửi ảnh liên tục qua TCP socket dưới dạng length-prefixed JPEG."""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.connect((self.server_ip, self.server_port))
+            rospy.loginfo("Đã kết nối tới server để stream video.")
+
+            while self.streaming and not rospy.is_shutdown():
+                if self.debugzzz is not None:
+                    # Nén thành JPEG
+                    ret, jpeg = cv2.imencode(".jpg", self.debugzzz)
+                    data = jpeg.tobytes()
+                    # Gửi độ dài trước (4 bytes) rồi gửi ảnh
+                    sock.sendall(struct.pack(">L", len(data)) + data)
+                time.sleep(0.05)  # ~20 FPS
+        except Exception as e:
+            rospy.logerr(f"Lỗi streaming: {e}")
+
 
 def main():
     rospy.init_node('jetbot_controller_node', anonymous=True)
