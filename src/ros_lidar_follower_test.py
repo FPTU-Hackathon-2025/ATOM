@@ -240,7 +240,7 @@ class JetBotController:
         original_height, original_width = image.shape[:2]
 
         img_resized = cv2.resize(image, self.YOLO_INPUT_SIZE)
-        img_data = np.array(img_resized, dtype=np.float32) / 255.0
+        img_data = np.array(img_resized, dtype=np.float16) / 255.0
         img_data = np.transpose(img_data, (2, 0, 1))  # HWC to CHW
         input_tensor = np.expand_dims(img_data, axis=0)  # Add batch dimension
 
