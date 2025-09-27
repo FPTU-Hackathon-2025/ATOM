@@ -32,6 +32,9 @@ def draw_map(json_file):
         elif data["type"] == "end":
             node_colors.append("red")
             logging.info(f"Node END: {node_id} tại ({data['x']}, {data['y']})")
+        elif data["type"] == "load":
+            node_colors.append("purple")
+            logging.info(f"Node LOAD: {node_id} tại ({data['x']}, {data['y']})")
         else:
             node_colors.append("lightblue")
             logging.debug(f"Node thường: {node_id}")

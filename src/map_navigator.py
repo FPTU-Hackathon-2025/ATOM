@@ -4,6 +4,8 @@
 import json
 import networkx as nx
 import math
+from itertools import permutations
+
 
 class MapNavigator:
     def __init__(self, map_file_path):
@@ -48,27 +50,72 @@ class MapNavigator:
 
     def find_path(self, start_node_id, end_node_id, banned_edges=None):
         """
-        Tìm đường đi ngắn nhất từ điểm bắt đầu đến điểm kết thúc bằng thuật toán A*.
+        Tìm đường đi từ start -> tất cả các load nodes (nếu có) -> end bằng A*.
+        Nếu không có load node, hoạt động như tìm đường ngắn nhất bình thường.
         :param start_node_id: ID của node bắt đầu.
         :param end_node_id: ID của node kết thúc.
         :param banned_edges: List các cạnh (u, v) bị cấm, dùng để tìm đường lại.
         :return: List các ID node trên đường đi, hoặc None nếu không có đường.
         """
+        # Chuẩn bị graph tạm (có thể loại bỏ banned_edges nếu có)
         graph_to_search = self.graph.copy()
         if banned_edges:
             graph_to_search.remove_edges_from(banned_edges)
 
-        try:
-            path = nx.astar_path(
-                graph_to_search, 
-                start_node_id, 
-                end_node_id, 
-                heuristic=self._heuristic
-            )
-            # rospy.loginfo(f"Path found: {path}")
-            return path
-        except nx.NetworkXNoPath:
-            return None
+        # Lấy danh sách load nodes
+        load_nodes = [n for n, d in self.nodes_data.items() if d["type"] == "load"]
+
+        # Trường hợp không có load node -> chạy A* như cũ
+        if not load_nodes:
+            try:
+                return nx.astar_path(
+                    graph_to_search,
+                    start_node_id,
+                    end_node_id,
+                    heuristic=self._heuristic
+                )
+            except nx.NetworkXNoPath:
+                return None
+
+        # Có load nodes -> phải đi qua tất cả
+        best_path = None
+        best_length = float("inf")
+
+        for order in permutations(load_nodes):
+            candidate_path = []
+            valid = True
+
+            # 1. start -> load đầu tiên
+            try:
+                sub_path = nx.astar_path(graph_to_search, start_node_id, order[0], heuristic=self._heuristic)
+            except nx.NetworkXNoPath:
+                continue
+            candidate_path.extend(sub_path)
+
+            # 2. đi qua các load tiếp theo
+            for i in range(len(order) - 1):
+                try:
+                    sub_path = nx.astar_path(graph_to_search, order[i], order[i+1], heuristic=self._heuristic)
+                    candidate_path.extend(sub_path[1:])  # bỏ node trùng
+                except nx.NetworkXNoPath:
+                    valid = False
+                    break
+            if not valid:
+                continue
+
+            # 3. load cuối -> end
+            try:
+                sub_path = nx.astar_path(graph_to_search, order[-1], end_node_id, heuristic=self._heuristic)
+                candidate_path.extend(sub_path[1:])
+            except nx.NetworkXNoPath:
+                continue
+
+            # Đánh giá độ dài
+            if len(candidate_path) < best_length:
+                best_length = len(candidate_path)
+                best_path = candidate_path
+
+        return best_path
 
     def get_next_direction_label(self, current_node_id, path):
         """
