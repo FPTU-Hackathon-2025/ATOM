@@ -120,7 +120,7 @@ class MapNavigator:
         # Vẽ nền bản đồ
         plt.ion()
         fig, ax = plt.subplots()
-
+        ax.invert_yaxis()
         nx.draw(G, pos, with_labels=True, node_color="lightgray", node_size=600, ax=ax)
         nx.draw_networkx_nodes(G, pos, nodelist=[self.start_node], node_color="green", node_size=700, ax=ax)
         nx.draw_networkx_nodes(G, pos, nodelist=[self.end_node], node_color="red", node_size=700, ax=ax)
