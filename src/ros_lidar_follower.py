@@ -315,7 +315,7 @@ class JetBotController:
         self.MQTT_DATA_TOPIC = "jetbot/corrected_event_data"
         self.current_state = None
         self.DIRECTIONS = [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST]
-        self.current_direction_index = 1
+        self.current_direction_index = 2 #hướng start là 1 (E), phải sửa thuật toán này ?
         self.ANGLE_TO_FACE_SIGN_MAP = {d: a for d, a in zip(self.DIRECTIONS, [45, -45, -135, 135])}
         self.MAX_CORRECTION_ADJ = 0.12
         self.MAP_FILE_PATH = "map.json"
