@@ -16,7 +16,6 @@ from pyzbar.pyzbar import decode
 import paho.mqtt.client as mqtt
 from sensor_msgs.msg import LaserScan, Image
 from opposite_detector import SimpleOppositeDetector
-import threading
 
 from map_navigator import MapNavigator
 
@@ -51,7 +50,6 @@ class JetBotController:
         self.banned_edges = []
         self.plan_initial_route()
 
-        self.debugzzz = None
         self.latest_scan = None
         self.latest_image = None
         self.detector = SimpleOppositeDetector()
@@ -60,8 +58,6 @@ class JetBotController:
         rospy.loginfo("Đã đăng ký vào các topic /scan và /csi_cam_0/image_raw.")
         self.state_change_time = rospy.get_time()
         self._set_state(RobotState.WAITING_FOR_LINE, initial=True)
-        threading.Thread(target=self.stream_socket, daemon=True).start()
-
         rospy.loginfo("Khởi tạo hoàn tất. Sẵn sàng hoạt động.")
 
     def plan_initial_route(self): 
@@ -465,17 +461,17 @@ class JetBotController:
                 self.robot.stop()
                 break
 
-            if self.video_writer is not None and self.latest_image is not None:
-                # Lấy ảnh gốc, vẽ thông tin lên, rồi ghi
-                debug_frame = self.draw_debug_info(self.latest_image)
-                self.debugzzz = debug_frame
-                if debug_frame is not None:
-                    self.video_writer.write(debug_frame)
-
+            self._record_frame()
 
             rate.sleep()
         self.cleanup()
 
+    def _record_frame(self):
+        """Hàm trợ giúp để vẽ thông tin và ghi một khung hình vào video."""
+        if self.video_writer is not None and self.latest_image is not None:
+            debug_frame = self.draw_debug_info(self.latest_image)
+            if debug_frame is not None:
+                self.video_writer.write(debug_frame)
 
     def cleanup(self):
         rospy.loginfo("Dừng robot và giải phóng tài nguyên...") 
@@ -773,7 +769,7 @@ class JetBotController:
             start_time = rospy.get_time()
             while rospy.get_time() - start_time < duration:
                 # Ghi lại khung hình trong khi robot đang quay
-                # self._record_frame()
+                self._record_frame()
                 # Thêm một khoảng nghỉ nhỏ để không làm quá tải CPU và để ROS có thời gian cập nhật
                 rospy.sleep(1.0 / self.VIDEO_FPS)
 
@@ -783,7 +779,7 @@ class JetBotController:
             self.current_direction_index = (self.current_direction_index + num_turns + 4) % 4
             rospy.loginfo(f"==> Hướng đi MỚI: {self.DIRECTIONS[self.current_direction_index].name}")
         time.sleep(0.5)
-        # self._record_frame()
+        self._record_frame()
     
     def _does_path_exist_in_frame(self, image):
         if image is None: return False
@@ -809,24 +805,6 @@ class JetBotController:
         self.turn_robot(90, update_main_direction=False)
         rospy.loginfo(f"[SCAN] Kết quả: {paths}")
         return paths
-
-    def stream_socket(self):
-        """Gửi ảnh liên tục qua TCP socket dưới dạng length-prefixed JPEG."""
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.connect((self.server_ip, self.server_port))
-            rospy.loginfo("Đã kết nối tới server để stream video.")
-
-            while self.streaming and not rospy.is_shutdown():
-                if self.debugzzz is not None:
-                    # Nén thành JPEG
-                    ret, jpeg = cv2.imencode(".jpg", self.debugzzz)
-                    data = jpeg.tobytes()
-                    # Gửi độ dài trước (4 bytes) rồi gửi ảnh
-                    sock.sendall(struct.pack(">L", len(data)) + data)
-                time.sleep(0.05)  # ~20 FPS
-        except Exception as e:
-            rospy.logerr(f"Lỗi streaming: {e}")
 
 def main():
     rospy.init_node('jetbot_controller_node', anonymous=True)
