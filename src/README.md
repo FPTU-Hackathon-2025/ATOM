@@ -8,4 +8,9 @@ roslaunch jetbot_pro csi_camera.launch
 python3 ros_lidar_follower.py
 cd ATOM/ATOM/src/
 ```
+
 ---
+
+sudo nmcli connection modify "FPT Hackathon 2025" connection.permissions ""
+nmcli connection show "FPT Hackathon 2025" | grep permissions
+sudo nmcli connection modify "FPT Hackathon 2025" connection.autoconnect yes
