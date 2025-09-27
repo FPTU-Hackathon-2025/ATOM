@@ -52,8 +52,7 @@ class JetBotController:
 
         self.initialize_mqtt()
 
-        self.video_writer = None
-        initialize_video_writer()
+        self.video_writer = initialize_video_writer(self)
 
         self.navigator = MapNavigator(self.MAP_FILE_PATH)
         self.current_node_id = self.navigator.start_node
