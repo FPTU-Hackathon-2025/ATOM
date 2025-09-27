@@ -125,16 +125,26 @@ class SimpleOppositeDetector:
 
     def process_detection(self, robot_map_direction):
         if self.latest_scan is None:
+            rospy.loginfo("No scan data available.")
             return False
+
         scan = self.latest_scan
         timestamp = rospy.get_time()
         all_objects = self.find_all_objects(scan)
+
         if len(all_objects) < 2:
+            rospy.loginfo(f"[{timestamp:.2f}] Not enough objects detected ({len(all_objects)}).")
             return False
 
         # Tính góc tuyệt đối map của các object
         for obj in all_objects:
             obj['absolute_angle'] = (obj['center_angle'] + robot_map_direction) % 360
+
+        # In log các object
+        rospy.loginfo(f"[{timestamp:.2f}] Detected objects with absolute angles:")
+        for i, obj in enumerate(all_objects):
+            rospy.loginfo(
+                f"  Object {i}: zone={obj['zone']}, distance={obj['distance']:.2f}, points={obj['point_count']}, angle={obj['absolute_angle']:.1f}°")
 
         # So sánh với 2 flag cố định: NE = 45°, SW = 225°
         NE_flag = 45.0
@@ -143,8 +153,12 @@ class SimpleOppositeDetector:
         found_NE = any(abs(obj['absolute_angle'] - NE_flag) <= tolerance for obj in all_objects)
         found_SW = any(abs(obj['absolute_angle'] - SW_flag) <= tolerance for obj in all_objects)
 
-        return found_NE and found_SW
+        if found_NE and found_SW:
+            rospy.loginfo(f"[{timestamp:.2f}] Both NE and SW flags detected → Intersection detected.")
+        else:
+            rospy.loginfo(f"[{timestamp:.2f}] Intersection not detected. NE_found={found_NE}, SW_found={found_SW}")
 
+        return found_NE and found_SW
 
     def detect_object_in_zone(self, zone_ranges, zone_name):
         if len(zone_ranges) == 0: return None
