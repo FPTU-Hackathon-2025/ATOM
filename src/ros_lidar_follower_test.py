@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import rospy
+# import rospy
 import cv2
 import numpy as np
 import time
@@ -9,7 +9,7 @@ import json
 import math
 from enum import Enum
 import requests
-import socket, struct
+import socket, struct, threading
 
 
 from jetbot import Robot
