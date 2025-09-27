@@ -36,6 +36,8 @@ class Direction(Enum):
 class JetBotController:
     def __init__(self):
         rospy.loginfo("Đang khởi tạo JetBot Event-Driven Controller...")
+        self.last_detection_time = 0  
+
         self.setup_parameters()
         self.initialize_hardware()
         self.initialize_yolo()
@@ -65,7 +67,7 @@ class JetBotController:
         self.streaming = True
         self.server_ip = "10.34.181.110"
         self.server_port = 6628
-        # threading.Thread(target=self.stream_socket, daemon=True).start()
+        threading.Thread(target=self.stream_socket, daemon=True).start()
 
 
         rospy.loginfo("Khởi tạo hoàn tất. Sẵn sàng hoạt động.")
@@ -388,11 +390,11 @@ class JetBotController:
             # TRẠNG THÁI 2: ĐANG TIẾN VÀO GIAO LỘ (APPROACHING_INTERSECTION)
             # ===================================================================
 
-
-                image_info = self.latest_image
-                detections = self.detect_with_yolo(image_info)
-                rospy.loginfo(detections)
-
+                if time.time() - self.last_detection_time >= 3.0:  # mỗi 3 giây
+                    image_info = self.latest_image
+                    detections = self.detect_with_yolo(image_info)
+                    rospy.loginfo(detections)
+                    self.last_detection_time = time.time()
 
             # elif self.current_state == RobotState.APPROACHING_INTERSECTION:
             #     # Đi thẳng một đoạn ngắn để vào trung tâm giao lộ
