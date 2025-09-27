@@ -31,21 +31,22 @@ def draw_debug_info(controller, image):
 
 
 def initialize_video_writer(controller):
-    """Khởi tạo đối tượng VideoWriter."""
     try:
         frame_size = (controller.WIDTH, controller.HEIGHT)
-        controller.video_writer = cv2.VideoWriter(controller.VIDEO_OUTPUT_FILENAME,
-                                                  controller.VIDEO_FOURCC,
-                                                  controller.VIDEO_FPS,
-                                                  frame_size)
-        if controller.video_writer.isOpened():
+        video_writer = cv2.VideoWriter(controller.VIDEO_OUTPUT_FILENAME,
+                                       controller.VIDEO_FOURCC,
+                                       controller.VIDEO_FPS,
+                                       frame_size)
+        if video_writer.isOpened():
             print(f"Bắt đầu ghi video vào file '{controller.VIDEO_OUTPUT_FILENAME}'")
         else:
             print("Không thể mở file video để ghi.")
-            controller.video_writer = None
+            video_writer = None
     except Exception as e:
         print(f"Lỗi khi khởi tạo VideoWriter: {e}")
-        controller.video_writer = None
+        video_writer = None
+    return video_writer
+
 
 
 def camera_callback(controller, image_msg):
