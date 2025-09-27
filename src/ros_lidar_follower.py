@@ -10,6 +10,7 @@ import math
 from enum import Enum
 import requests
 import threading
+import socket
 
 from jetbot import Robot
 import onnxruntime as ort
@@ -468,7 +469,7 @@ class JetBotController:
                 rospy.loginfo("ĐÃ HOÀN THÀNH NHIỆM VỤ. Dừng hoạt động.") 
                 self.robot.stop()
                 break
-            
+
             if self.video_writer is not None and self.latest_image is not None:
                 # Lấy ảnh gốc, vẽ thông tin lên, rồi ghi
                 debug_frame = self.draw_debug_info(self.latest_image)
