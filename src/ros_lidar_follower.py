@@ -281,8 +281,8 @@ class JetBotController:
 
     def setup_parameters(self):
         self.WIDTH, self.HEIGHT = 300, 300
-        self.BASE_SPEED = 0.16
-        self.TURN_SPEED = 0.18
+        self.BASE_SPEED = 0.15
+        self.TURN_SPEED = 0.17
         self.TURN_DURATION_90_DEG = 0.8
         self.ROI_Y = int(self.HEIGHT * 0.85)
         self.ROI_H = int(self.HEIGHT * 0.15)
