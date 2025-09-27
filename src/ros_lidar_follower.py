@@ -284,7 +284,7 @@ class JetBotController:
 
 
     def setup_parameters(self):
-        self.INTERSECTION_COOLDOWN = 6.0  # phải qua 3s mới cho phép vào giao lộ mới
+        self.INTERSECTION_COOLDOWN = 7.0  # phải qua 3s mới cho phép vào giao lộ mới
         self.WIDTH, self.HEIGHT = 300, 300
         self.BASE_SPEED = 0.16
         self.TURN_SPEED = 0.19
