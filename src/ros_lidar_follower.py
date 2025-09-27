@@ -287,7 +287,7 @@ class JetBotController:
         self.INTERSECTION_COOLDOWN = 6.0  # phải qua 3s mới cho phép vào giao lộ mới
         self.WIDTH, self.HEIGHT = 300, 300
         self.BASE_SPEED = 0.16
-        self.TURN_SPEED = 0.20
+        self.TURN_SPEED = 0.19
         self.TURN_DURATION_90_DEG = 0.8
         self.ROI_Y = int(self.HEIGHT * 0.85)
         self.ROI_H = int(self.HEIGHT * 0.15)
