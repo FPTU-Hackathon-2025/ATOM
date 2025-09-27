@@ -86,6 +86,31 @@ class JetBotController:
         if self.planned_path and len(self.planned_path) > 1:
             self.target_node_id = self.planned_path[1]
             rospy.loginfo(f"Đã tìm thấy đường đi: {self.planned_path}. Đích đến đầu tiên: {self.target_node_id}")
+        
+            # === SUY RA HƯỚNG BAN ĐẦU TỪ CẠNH (start -> next) ===
+            start_node = self.planned_path[0]
+            next_node  = self.planned_path[1]
+
+            # Cách 1: dùng API trong MapNavigator (khuyến nghị)
+            direction_label = None
+            try:
+                if hasattr(self.navigator, "get_direction_label_between"):
+                    direction_label = self.navigator.get_direction_label_between(start_node, next_node)
+                else:
+                    # fallback nếu chưa thêm helper
+                    edge_data = self.navigator.graph.get_edge_data(start_node, next_node)
+                    direction_label = edge_data.get('label') if edge_data else None
+            except Exception as e:
+                rospy.logwarn(f"Không lấy được label cạnh {start_node}->{next_node}: {e}")
+
+            # Map sang enum/index nếu hợp lệ
+            if direction_label in self.LABEL_TO_DIRECTION_ENUM:
+                dir_enum = self.LABEL_TO_DIRECTION_ENUM[direction_label]
+                self.current_direction_index = dir_enum.value
+                rospy.loginfo(f"Hướng ban đầu SUY RA: {dir_enum.name} (từ cạnh {start_node}->{next_node})")
+            else:
+                rospy.logwarn("Không suy ra được hướng ban đầu từ cạnh đầu tiên; giữ giá trị hiện tại.")
+
         else:
             rospy.logerr("Không tìm thấy đường đi hoặc đường đi quá ngắn!")
             self._set_state(RobotState.DEAD_END)
@@ -284,7 +309,7 @@ class JetBotController:
 
 
     def setup_parameters(self):
-        self.INTERSECTION_COOLDOWN = 7.0  # phải qua 3s mới cho phép vào giao lộ mới
+        self.INTERSECTION_COOLDOWN = 8.0  # phải qua 3s mới cho phép vào giao lộ mới
         self.WIDTH, self.HEIGHT = 300, 300
         self.BASE_SPEED = 0.16
         self.TURN_SPEED = 0.19
@@ -315,7 +340,11 @@ class JetBotController:
         self.MQTT_DATA_TOPIC = "jetbot/corrected_event_data"
         self.current_state = None
         self.DIRECTIONS = [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST]
+
+
         self.current_direction_index = 1 #hướng start là 1 (E), phải sửa thuật toán này ?
+
+
         self.ANGLE_TO_FACE_SIGN_MAP = {d: a for d, a in zip(self.DIRECTIONS, [45, -45, -135, 135])}
         self.MAX_CORRECTION_ADJ = 0.12
         self.MAP_FILE_PATH = "map.json"
