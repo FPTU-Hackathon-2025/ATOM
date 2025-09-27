@@ -191,6 +191,14 @@ class JetBotController:
             self.current_state = new_state
             self.state_change_time = rospy.get_time()
 
+    def publish_data(self, data: dict):
+        """Gửi dữ liệu qua MQTT."""
+        if self.mqtt_client:
+            try:
+                self.mqtt_client.publish(self.MQTT_DATA_TOPIC, json.dumps(data))
+                rospy.loginfo(f"Đã publish dữ liệu: {data}")
+            except Exception as e:
+                rospy.logerr(f"Không thể publish dữ liệu: {e}")
 
     def run(self):
         rospy.loginfo("Bắt đầu vòng lặp. Đợi 3 giây...") 
