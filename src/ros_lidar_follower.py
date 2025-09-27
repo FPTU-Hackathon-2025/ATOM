@@ -51,6 +51,7 @@ class JetBotController:
         self.planned_path = None
         self.banned_edges = []
         self.plan_initial_route()
+        self.debugzzz = None
 
         self.latest_scan = None
         self.latest_image = None
