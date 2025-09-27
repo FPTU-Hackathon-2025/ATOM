@@ -104,32 +104,96 @@ class JetBotController:
             rospy.logerr(f"Lỗi khi khởi tạo VideoWriter: {e}")
             self.video_writer = None
 
+    def _compute_masks(self, image, roi_y, roi_h):
+        """Trả về (color_mask, focus_mask, final_mask) cho một ROI."""
+        roi = image[roi_y: roi_y + roi_h, :]
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+
+        color_mask = cv2.inRange(hsv, self.LINE_COLOR_LOWER, self.LINE_COLOR_UPPER)
+
+        # Focus mask: chỉ giữ vùng giữa ảnh theo ROI_CENTER_WIDTH_PERCENT
+        focus_mask = np.zeros_like(color_mask)
+        h, w = focus_mask.shape
+        center_w = int(w * self.ROI_CENTER_WIDTH_PERCENT)
+        sx = (w - center_w) // 2
+        ex = sx + center_w
+        cv2.rectangle(focus_mask, (sx, 0), (ex, h), 255, -1)
+
+        final_mask = cv2.bitwise_and(color_mask, focus_mask)
+        return color_mask, focus_mask, final_mask
+
+
+    def _tile3(self, m1, m2, m3, label, tile_h=90, tile_w=120):
+        """Chuyển 3 mask xám -> BGR, resize và ghép ngang thành strip kèm nhãn."""
+        # đổi GRAY -> BGR để vẽ chữ dễ/đặt lên frame màu
+        def to_bgr(m):
+            bgr = cv2.cvtColor(m, cv2.COLOR_GRAY2BGR)
+            return cv2.resize(bgr, (tile_w, tile_h), interpolation=cv2.INTER_AREA)
+
+        t1, t2, t3 = to_bgr(m1), to_bgr(m2), to_bgr(m3)
+        strip = cv2.hconcat([t1, t2, t3])
+        cv2.putText(strip, label, (6, tile_h - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1, cv2.LINE_AA)
+        # nhãn cột nhỏ
+        cv2.putText(strip, "color", (5, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1, cv2.LINE_AA)
+        cv2.putText(strip, "focus", (tile_w + 5, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1, cv2.LINE_AA)
+        cv2.putText(strip, "final", (tile_w*2 + 5, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1, cv2.LINE_AA)
+        return strip
+
+
+    def _paste(self, dst, tile, x, y):
+        """Dán tile vào frame ở (x,y) nếu còn chỗ."""
+        H, W = dst.shape[:2]
+        h, w = tile.shape[:2]
+        if y + h <= H and x + w <= W:
+            dst[y:y+h, x:x+w] = tile
+
+
     def draw_debug_info(self, image):
-        """Vẽ các thông tin gỡ lỗi lên một khung hình."""
+        """Vẽ thông tin gỡ lỗi + thumbnail các mask ROI lên frame."""
         if image is None:
             return None
-        
+
         debug_frame = image.copy()
-        
-        # 1. Vẽ các ROI
-        # ROI Chính (màu xanh lá)
+
+        # Viền ROI
         cv2.rectangle(debug_frame, (0, self.ROI_Y), (self.WIDTH-1, self.ROI_Y + self.ROI_H), (0, 255, 0), 1)
-        # ROI Dự báo (màu vàng)
         cv2.rectangle(debug_frame, (0, self.LOOKAHEAD_ROI_Y), (self.WIDTH-1, self.LOOKAHEAD_ROI_Y + self.LOOKAHEAD_ROI_H), (0, 255, 255), 1)
 
-        # 2. Vẽ trạng thái hiện tại
-        state_text = f"State: {self.current_state.name}"
+        # State text
+        state_text = f"State: {self.current_state.name if self.current_state else 'N/A'}"
         cv2.putText(debug_frame, state_text, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-        
-        # 3. Vẽ line và trọng tâm (nếu robot đang bám line)
+
+        # Tính line_center ở ROI chính -> vẽ đường đỏ
         if self.current_state == RobotState.DRIVING_STRAIGHT:
-            # Lấy line center của ROI Chính
             line_center = self._get_line_center(image, self.ROI_Y, self.ROI_H)
             if line_center is not None:
-                # Vẽ một đường thẳng đứng màu đỏ tại vị trí trọng tâm
                 cv2.line(debug_frame, (line_center, self.ROI_Y), (line_center, self.ROI_Y + self.ROI_H), (0, 0, 255), 2)
 
+        # === NEW: tính và hiển thị các mask ===
+        try:
+            c1, f1, g1 = self._compute_masks(image, self.ROI_Y, self.ROI_H)  # ROI chính
+            c2, f2, g2 = self._compute_masks(image, self.LOOKAHEAD_ROI_Y, self.LOOKAHEAD_ROI_H)  # ROI nhìn xa
+
+            strip1 = self._tile3(c1, f1, g1, "ROI main")
+            strip2 = self._tile3(c2, f2, g2, "ROI lookahead")
+
+            # Dán strips vào góc phải-trên (hai hàng)
+            pad = 6
+            x = self.WIDTH - max(strip1.shape[1], strip2.shape[1]) - pad
+            y1 = pad
+            y2 = y1 + strip1.shape[0] + pad
+
+            self._paste(debug_frame, strip1, x, y1)
+            self._paste(debug_frame, strip2, x, y2)
+
+            # Gợi ý: bạn có thể lưu mask cuối để debug sâu hơn
+            self._last_final_mask_main = g1
+            self._last_final_mask_lookahead = g2
+        except Exception as e:
+            cv2.putText(debug_frame, f"mask err: {e}", (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1, cv2.LINE_AA)
+
         return debug_frame
+
 
     def setup_parameters(self):
         self.WIDTH, self.HEIGHT = 300, 300
@@ -393,13 +457,13 @@ class JetBotController:
 
                 # --- BƯỚC 2: LOGIC "NHÌN XA HƠN" VỚI ROI DỰ BÁO ---
                 # Nếu LiDAR im lặng, kiểm tra xem vạch kẻ có sắp biến mất ở phía xa không.
-                # lookahead_line_center = self._get_line_center(self.latest_image, self.LOOKAHEAD_ROI_Y, self.LOOKAHEAD_ROI_H)
+                lookahead_line_center = self._get_line_center(self.latest_image, self.LOOKAHEAD_ROI_Y, self.LOOKAHEAD_ROI_H)
 
-                # if lookahead_line_center is None:
-                #     rospy.logwarn("SỰ KIỆN (Dự báo): Vạch kẻ đường biến mất ở phía xa. Chuẩn bị vào giao lộ.")
-                #     # Hành động phòng ngừa: chuyển sang trạng thái đi thẳng vào giao lộ.
-                #     self._set_state(RobotState.APPROACHING_INTERSECTION)
-                #     continue # Bắt đầu vòng lặp mới với trạng thái mới
+                if lookahead_line_center is None:
+                    rospy.logwarn("SỰ KIỆN (Dự báo): Vạch kẻ đường biến mất ở phía xa. Chuẩn bị vào giao lộ.")
+                    # Hành động phòng ngừa: chuyển sang trạng thái đi thẳng vào giao lộ.
+                    self._set_state(RobotState.APPROACHING_INTERSECTION)
+                    continue # Bắt đầu vòng lặp mới với trạng thái mới
 
                 # --- BƯỚC 3: BÁM LINE BÌNH THƯỜNG (NẾU PHÍA TRƯỚC AN TOÀN) ---
                 # Chỉ khi cả LiDAR và ROI Dự báo đều ổn, ta mới thực hiện bám line.
