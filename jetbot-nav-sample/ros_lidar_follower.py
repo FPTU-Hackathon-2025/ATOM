@@ -139,7 +139,7 @@ class JetBotController:
         self.INTERSECTION_APPROACH_DURATION = 0.5
         self.LINE_REACQUIRE_TIMEOUT = 3.0
         self.SCAN_PIXEL_THRESHOLD = 100
-        self.YOLO_MODEL_PATH = "models/best.onnx"
+        self.YOLO_MODEL_PATH = "best.onnx"
         self.YOLO_CONF_THRESHOLD = 0.6
         self.YOLO_INPUT_SIZE = (640, 640)
         self.YOLO_CLASS_NAMES = ['N', 'E', 'W', 'S', 'NN', 'NE', 'NW', 'NS', 'math']

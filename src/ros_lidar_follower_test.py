@@ -603,9 +603,8 @@ class JetBotController:
         '''
         image_info = self.latest_image #lấy từ camera_callback
         detections = self.detect_with_yolo(image_info)
+        rospy.loginfo(detections)
         self.turn_robot(-angle_to_sign, False) #quay về hướng ban đầu
-        
-
 
 
 
