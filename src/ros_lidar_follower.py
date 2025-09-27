@@ -393,13 +393,13 @@ class JetBotController:
 
                 # --- BƯỚC 2: LOGIC "NHÌN XA HƠN" VỚI ROI DỰ BÁO ---
                 # Nếu LiDAR im lặng, kiểm tra xem vạch kẻ có sắp biến mất ở phía xa không.
-                lookahead_line_center = self._get_line_center(self.latest_image, self.LOOKAHEAD_ROI_Y, self.LOOKAHEAD_ROI_H)
+                # lookahead_line_center = self._get_line_center(self.latest_image, self.LOOKAHEAD_ROI_Y, self.LOOKAHEAD_ROI_H)
 
-                if lookahead_line_center is None:
-                    rospy.logwarn("SỰ KIỆN (Dự báo): Vạch kẻ đường biến mất ở phía xa. Chuẩn bị vào giao lộ.")
-                    # Hành động phòng ngừa: chuyển sang trạng thái đi thẳng vào giao lộ.
-                    self._set_state(RobotState.APPROACHING_INTERSECTION)
-                    continue # Bắt đầu vòng lặp mới với trạng thái mới
+                # if lookahead_line_center is None:
+                #     rospy.logwarn("SỰ KIỆN (Dự báo): Vạch kẻ đường biến mất ở phía xa. Chuẩn bị vào giao lộ.")
+                #     # Hành động phòng ngừa: chuyển sang trạng thái đi thẳng vào giao lộ.
+                #     self._set_state(RobotState.APPROACHING_INTERSECTION)
+                #     continue # Bắt đầu vòng lặp mới với trạng thái mới
 
                 # --- BƯỚC 3: BÁM LINE BÌNH THƯỜNG (NẾU PHÍA TRƯỚC AN TOÀN) ---
                 # Chỉ khi cả LiDAR và ROI Dự báo đều ổn, ta mới thực hiện bám line.
@@ -581,7 +581,7 @@ class JetBotController:
         cv2.waitKey(1)
         
         # Tìm contours trên mặt nạ cuối cùng đã được lọc
-        contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        _, contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         if not contours:
             return None
@@ -803,7 +803,7 @@ class JetBotController:
         roi = image[self.ROI_Y : self.ROI_Y + self.ROI_H, :]
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         mask = cv2.inRange(hsv, self.LINE_COLOR_LOWER, self.LINE_COLOR_UPPER)
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        _img, contours, _hierarchy = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         return bool(contours) and cv2.contourArea(max(contours, key=cv2.contourArea)) > self.SCAN_PIXEL_THRESHOLD
     
     def scan_for_available_paths_proactive(self):
