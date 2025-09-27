@@ -479,11 +479,17 @@ class JetBotController:
         except Exception as e: rospy.logerr(f"Lỗi chuyển đổi ảnh: {e}")
 
     def run(self):
-        rospy.loginfo("Bắt đầu vòng lặp. Đợi 3 giây...") 
-        time.sleep(3) 
+        rospy.loginfo("Robot đang chờ lệnh. Nhấn Enter để bắt đầu...")
+        input()  # Chờ người dùng nhấn Enter
         rospy.loginfo("Hành trình bắt đầu!")
         self.detector.start_scanning()
         rate = rospy.Rate(20)
+
+        # Luôn bắt đầu ở trạng thái chờ
+        self._set_state(RobotState.WAITING_FOR_LINE)
+
+        first_intersection_ignored = False  # Dùng để bỏ qua trigger đầu tiên
+
         while not rospy.is_shutdown():
             # ===================================================================
             # TRẠNG THÁI 0: ĐANG CHỜ TÌM THẤY LINE (WAITING_FOR_LINE)
@@ -526,7 +532,10 @@ class JetBotController:
                 # Đây là tín hiệu đáng tin cậy nhất, nếu nó kích hoạt, xử lý ngay.
                 if self.detector.process_detection():
                     now = rospy.get_time()
-                    if (now - self.last_intersection_time) < self.INTERSECTION_COOLDOWN:
+                    if not first_intersection_ignored:
+                        rospy.loginfo("Phát hiện giao lộ lần đầu, bỏ qua để đi thẳng.")
+                        first_intersection_ignored = True
+                    elif (now - self.last_intersection_time) < self.INTERSECTION_COOLDOWN:
                         # Chưa đủ 3s -> bỏ qua trigger, tiếp tục bám line
                         # (có thể log nhẹ để debug)
                         rospy.logwarn_throttle(2.0, "Cooldown giao lộ: chưa đủ 3s, bỏ qua trigger.")
