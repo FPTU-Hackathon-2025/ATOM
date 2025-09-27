@@ -105,12 +105,37 @@ class JetBotController:
             self.video_writer = None
 
     def _compute_masks(self, image, roi_y, roi_h):
-        """Trả về (roi_bgr, color_mask, focus_mask, final_mask) cho một ROI."""
         roi = image[roi_y: roi_y + roi_h, :]
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        H, S, V = cv2.split(hsv)
 
-        color_mask = cv2.inRange(hsv, self.LINE_COLOR_LOWER, self.LINE_COLOR_UPPER)
+        # --- 0) Ngưỡng động theo percentile để chịu đựng thay đổi ánh sáng ---
+        v_dark = int(np.clip(np.percentile(V, 25), 60, 130))   # “tối” tương đối
+        s_lo   = 90                                            # đen thường có bão hòa thấp-vừa
 
+        # --- 1) Mask tối (HSV) ---
+        hsv_dark = cv2.inRange(hsv,
+                            np.array([0,   0,     0], dtype=np.uint8),
+                            np.array([179, s_lo, v_dark], dtype=np.uint8))
+
+        # --- 2) Adaptive threshold (grayscale, đảo) để giữ đường trong nền sáng ---
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        # làm mượt nhẹ để bớt noise muối tiêu
+        gray_blur = cv2.medianBlur(gray, 3)
+        # ngưỡng thích nghi (ô 15x15; C=5 điều chỉnh lệch)
+        bin_inv = cv2.adaptiveThreshold(
+            gray_blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV, 15, 5
+        )
+
+        # --- 3) Khử đốm loé (specular): S rất thấp & V rất cao -> gần trắng bóng ---
+        specular = cv2.inRange(hsv,
+                            np.array([0,   0,   200], dtype=np.uint8),
+                            np.array([179, 35, 255], dtype=np.uint8))
+        specular = cv2.medianBlur(specular, 3)
+
+        # --- 4) Hợp nhất & khử loé ---
+        color_mask = hsv_dark
         focus_mask = np.zeros_like(color_mask)
         h, w = focus_mask.shape
         center_w = int(w * self.ROI_CENTER_WIDTH_PERCENT)
@@ -118,9 +143,17 @@ class JetBotController:
         ex = sx + center_w
         cv2.rectangle(focus_mask, (sx, 0), (ex, h), 255, -1)
 
-        final_mask = cv2.bitwise_and(color_mask, focus_mask)
-        return roi, color_mask, focus_mask, final_mask
+        # final = (đen theo HSV  OR  đen theo adaptive)  AND  focus  AND  NOT specular
+        final_mask = cv2.bitwise_or(color_mask, bin_inv)
+        final_mask = cv2.bitwise_and(final_mask, focus_mask)
+        final_mask = cv2.bitwise_and(final_mask, cv2.bitwise_not(specular))
 
+        # --- 5) Hình thái học để liền nét & bớt răng cưa ---
+        k = np.ones((3,3), np.uint8)
+        final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_CLOSE, k, iterations=1)
+        final_mask = cv2.medianBlur(final_mask, 3)
+
+        return roi, color_mask, focus_mask, final_mask
 
     def _strip4(self, roi_bgr, color_mask, focus_mask, final_mask, label,
                 tile_h=90, tile_w=120):
