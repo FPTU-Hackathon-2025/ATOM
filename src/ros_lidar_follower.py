@@ -204,7 +204,7 @@ class JetBotController:
             self._last_final_mask_lookahead = g2
 
         except Exception as e:
-            cv2.putText(debug_frame, f"mask err: {e}", (10, 40),
+            rospy.logerr(debug_frame, f"mask err: {e}", (10, 40),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1, cv2.LINE_AA)
 
         return debug_frame
