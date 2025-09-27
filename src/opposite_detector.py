@@ -123,50 +123,28 @@ class SimpleOppositeDetector:
                     opposite_pairs.append({'object1': obj1, 'object2': obj2, 'angle_difference': angle_diff})
         return opposite_pairs
 
-    def process_detection(self):
-        """
-        Phiên bản nâng cấp: Phát hiện giao lộ dựa trên 2 flag cố định E–NE (45°) và W–SW (225°)
-        Góc tuyệt đối map = center_angle LiDAR + hướng hiện tại của robot trên map
-        """
+    def process_detection(self, robot_map_direction):
         if self.latest_scan is None:
             return False
-
         scan = self.latest_scan
         timestamp = rospy.get_time()
-
-        # Lấy tất cả các object từ LiDAR
         all_objects = self.find_all_objects(scan)
-        if len(all_objects) == 0:
+        if len(all_objects) < 2:
             return False
 
-        # Góc tuyệt đối của robot trên map (ban đầu E = 0°)
-        robot_map_direction = self.DIRECTIONS[self.current_direction_index].value * 90
-
-        # Tính góc tuyệt đối map của từng object
+        # Tính góc tuyệt đối map của các object
         for obj in all_objects:
             obj['absolute_angle'] = (obj['center_angle'] + robot_map_direction) % 360
 
-        # Flag cố định trên map
-        FLAG_1 = 45  # E–NE
-        FLAG_2 = 225  # W–SW
-        TOLERANCE = 15  # ±15° để nhận diện
+        # So sánh với 2 flag cố định: NE = 45°, SW = 225°
+        NE_flag = 45.0
+        SW_flag = 225.0
+        tolerance = 10.0  # ±10 độ
+        found_NE = any(abs(obj['absolute_angle'] - NE_flag) <= tolerance for obj in all_objects)
+        found_SW = any(abs(obj['absolute_angle'] - SW_flag) <= tolerance for obj in all_objects)
 
-        flag1_detected = any(
-            abs((obj['absolute_angle'] - FLAG_1 + 180) % 360 - 180) <= TOLERANCE for obj in all_objects)
-        flag2_detected = any(
-            abs((obj['absolute_angle'] - FLAG_2 + 180) % 360 - 180) <= TOLERANCE for obj in all_objects)
+        return found_NE and found_SW
 
-        if flag1_detected and flag2_detected:
-            rospy.loginfo(f"[{timestamp:.2f}] *** GIAO LỘ ĐÃ PHÁT HIỆN (flags E-NE & W-SW) ***")
-            notification = {
-                "timestamp": timestamp,
-                "detection_type": "OPPOSITE_FLAGS",
-                "flags_detected": [FLAG_1, FLAG_2]
-            }
-            # self.notification_pub.publish(json.dumps(notification))
-            return True
-        else:
-            return False
 
     def detect_object_in_zone(self, zone_ranges, zone_name):
         if len(zone_ranges) == 0: return None

@@ -363,7 +363,8 @@ class JetBotController:
 
                 # --- BƯỚC 1: KIỂM TRA TÍN HIỆU ƯU TIÊN CAO (LiDAR) ---
                 # Đây là tín hiệu đáng tin cậy nhất, nếu nó kích hoạt, xử lý ngay.
-                if self.detector.process_detection():
+                robot_map_direction = self.DIRECTIONS[self.current_direction_index].value * 90
+                if self.detector.process_detection(robot_map_direction):
                     rospy.loginfo("SỰ KIỆN (LiDAR): Phát hiện giao lộ. Dừng ngay lập tức.")
                     self.robot.stop()
                     time.sleep(0.5) # Chờ robot dừng hẳn
