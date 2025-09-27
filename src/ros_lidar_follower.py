@@ -9,6 +9,7 @@ import json
 import math
 from enum import Enum
 import requests
+import threading
 
 from jetbot import Robot
 import onnxruntime as ort
@@ -34,6 +35,7 @@ class Direction(Enum):
 
 class JetBotController:
     def __init__(self):
+        rospy.loginfo("Đang khởi tạo JetBot Event-Driven Controller...")
         self.setup_parameters()
         self.initialize_hardware()
         self.initialize_yolo()
@@ -57,6 +59,13 @@ class JetBotController:
         rospy.loginfo("Đã đăng ký vào các topic /scan và /csi_cam_0/image_raw.")
         self.state_change_time = rospy.get_time()
         self._set_state(RobotState.WAITING_FOR_LINE, initial=True)
+
+        self.streaming = True
+        self.server_ip = "10.34.181.110"
+        self.server_port = 6628
+        threading.Thread(target=self.stream_socket, daemon=True).start()
+
+
         rospy.loginfo("Khởi tạo hoàn tất. Sẵn sàng hoạt động.")
 
     def plan_initial_route(self): 
@@ -155,7 +164,7 @@ class JetBotController:
         self.MAX_CORRECTION_ADJ = 0.12
         self.MAP_FILE_PATH = "map.json"
         self.LABEL_TO_DIRECTION_ENUM = {'N': Direction.NORTH, 'E': Direction.EAST, 'S': Direction.SOUTH, 'W': Direction.WEST}
-        self.VIDEO_OUTPUT_FILENAME = 'jetbot_run.avi'
+        self.VIDEO_OUTPUT_FILENAME = 'jetbot_run.mp4'
         self.VIDEO_FPS = 20  # Nên khớp với rospy.Rate của bạn
         # Codec 'MJPG' rất phổ biến và tương thích tốt
         self.VIDEO_FOURCC = cv2.VideoWriter_fourcc(*'MJPG')
@@ -459,8 +468,14 @@ class JetBotController:
                 rospy.loginfo("ĐÃ HOÀN THÀNH NHIỆM VỤ. Dừng hoạt động.") 
                 self.robot.stop()
                 break
+            
+            if self.video_writer is not None and self.latest_image is not None:
+                # Lấy ảnh gốc, vẽ thông tin lên, rồi ghi
+                debug_frame = self.draw_debug_info(self.latest_image)
+                self.debugzzz = debug_frame
+                if debug_frame is not None:
+                    self.video_writer.write(debug_frame)
 
-            self._record_frame()
 
             rate.sleep()
         self.cleanup()
@@ -804,6 +819,25 @@ class JetBotController:
         self.turn_robot(90, update_main_direction=False)
         rospy.loginfo(f"[SCAN] Kết quả: {paths}")
         return paths
+
+    def stream_socket(self):
+        """Gửi ảnh liên tục qua TCP socket dưới dạng length-prefixed JPEG."""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.connect((self.server_ip, self.server_port))
+            rospy.loginfo("Đã kết nối tới server để stream video.")
+
+            while self.streaming and not rospy.is_shutdown():
+                if self.debugzzz is not None:
+                    # Nén thành JPEG
+                    ret, jpeg = cv2.imencode(".jpg", self.debugzzz)
+                    data = jpeg.tobytes()
+                    # Gửi độ dài trước (4 bytes) rồi gửi ảnh
+                    sock.sendall(struct.pack(">L", len(data)) + data)
+                time.sleep(0.05)  # ~20 FPS
+        except Exception as e:
+            rospy.logerr(f"Lỗi streaming: {e}")
+
 
 def main():
     rospy.init_node('jetbot_controller_node', anonymous=True)
