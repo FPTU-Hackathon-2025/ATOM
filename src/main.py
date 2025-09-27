@@ -49,13 +49,7 @@ class JetBotController:
             conf_threshold=self.YOLO_CONF_THRESHOLD
         )
 
-        self.robot_utils = RobotUtils(
-            label_to_direction_enum=self.LABEL_TO_DIRECTION_ENUM,
-            robot=self.robot,
-            video_writer=self.video_writer,
-            detector=self.detector,
-            mqtt_client=self.mqtt_client
-        )
+
         self.initialize_mqtt()
 
         self.video_writer = None
@@ -71,6 +65,13 @@ class JetBotController:
         self.latest_scan = None
         self.latest_image = None
         self.detector = SimpleOppositeDetector()
+        self.robot_utils = RobotUtils(
+            label_to_direction_enum=self.LABEL_TO_DIRECTION_ENUM,
+            robot=self.robot,
+            video_writer=self.video_writer,
+            detector=self.detector,
+            mqtt_client=self.mqtt_client
+        )
         rospy.Subscriber('/scan', LaserScan, self.detector.callback)
         rospy.Subscriber('/csi_cam_0/image_raw', Image, lambda msg: camera_callback(self, msg))
         rospy.loginfo("Đã đăng ký vào các topic /scan và /csi_cam_0/image_raw.")
