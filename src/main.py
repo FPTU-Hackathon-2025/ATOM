@@ -16,8 +16,8 @@ from pyzbar.pyzbar import decode
 import paho.mqtt.client as mqtt
 from sensor_msgs.msg import LaserScan, Image
 
-from src.RobotUtils import RobotUtils
-from src.YOLODetector import YOLODetector
+from RobotUtils import RobotUtils
+from YOLODetector import YOLODetector
 from video_utils import draw_debug_info, initialize_video_writer, camera_callback
 from opposite_detector import SimpleOppositeDetector
 
