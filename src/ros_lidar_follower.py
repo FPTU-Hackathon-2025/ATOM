@@ -774,7 +774,7 @@ class JetBotController:
                 # decoded = decode(qr_image)
                 # if decoded: qr_data = decoded[0].data.decode('utf-8'); self.publish_data(...)
                 rospy.loginfo("Found QR Code. Publishing data...")
-                self.publish_data({'type': 'QR_CODE', 'value': 'simulated_data_123'})
+                # self.publish_data({'type': 'QR_CODE', 'value': 'simulated_data_123'})
 
                 # response = requests.post(url, json=data)
 
