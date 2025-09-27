@@ -38,6 +38,7 @@ class Direction(Enum):
 class JetBotController:
     def __init__(self):
         rospy.loginfo("Đang khởi tạo JetBot Event-Driven Controller...")
+        self.last_intersection_time = -1e9  # cho phép lần đầu ngay lập tức
         self.setup_parameters()
         self.initialize_hardware()
         self.initialize_yolo()
@@ -280,8 +281,9 @@ class JetBotController:
 
 
     def setup_parameters(self):
+        self.INTERSECTION_COOLDOWN = 3.0  # phải qua 3s mới cho phép vào giao lộ mới
         self.WIDTH, self.HEIGHT = 300, 300
-        self.BASE_SPEED = 0.15
+        self.BASE_SPEED = 0.16
         self.TURN_SPEED = 0.17
         self.TURN_DURATION_90_DEG = 0.8
         self.ROI_Y = int(self.HEIGHT * 0.85)
@@ -294,7 +296,7 @@ class JetBotController:
         self.SAFE_ZONE_PERCENT = 0.3
         self.LINE_COLOR_LOWER = np.array([0, 0, 0])
         self.LINE_COLOR_UPPER = np.array([180, 255, 95])
-        self.INTERSECTION_CLEARANCE_DURATION = 0.5
+        self.INTERSECTION_CLEARANCE_DURATION = 1
         self.INTERSECTION_APPROACH_DURATION = 0.5
         self.LINE_REACQUIRE_TIMEOUT = 3.0
         self.SCAN_PIXEL_THRESHOLD = 100
@@ -523,21 +525,27 @@ class JetBotController:
                 # --- BƯỚC 1: KIỂM TRA TÍN HIỆU ƯU TIÊN CAO (LiDAR) ---
                 # Đây là tín hiệu đáng tin cậy nhất, nếu nó kích hoạt, xử lý ngay.
                 if self.detector.process_detection():
-                    rospy.loginfo("SỰ KIỆN (LiDAR): Phát hiện giao lộ. Dừng ngay lập tức.")
-                    self.robot.stop()
-                    time.sleep(0.5) # Chờ robot dừng hẳn
-
-                    # Cập nhật vị trí hiện tại (đã đến đích) và xử lý
-                    self.current_node_id = self.target_node_id
-                    rospy.loginfo(f"==> ĐÃ ĐẾN node {self.current_node_id}.")
-
-                    if self.current_node_id == self.navigator.end_node:
-                        rospy.loginfo("ĐÃ ĐẾN ĐÍCH CUỐI CÙNG!")
-                        self._set_state(RobotState.GOAL_REACHED)
+                    now = rospy.get_time()
+                    if (now - self.last_intersection_time) < self.INTERSECTION_COOLDOWN:
+                        # Chưa đủ 3s -> bỏ qua trigger, tiếp tục bám line
+                        # (có thể log nhẹ để debug)
+                        rospy.logwarn_throttle(2.0, "Cooldown giao lộ: chưa đủ 3s, bỏ qua trigger.")
                     else:
-                        self._set_state(RobotState.HANDLING_EVENT)
-                        self.handle_intersection()
-                    continue # Bắt đầu vòng lặp mới với trạng thái mới
+                        rospy.loginfo("SỰ KIỆN (LiDAR): Phát hiện giao lộ. Dừng ngay lập tức.")
+                        self.robot.stop()
+                        time.sleep(0.5) # Chờ robot dừng hẳn
+
+                        # Cập nhật vị trí hiện tại (đã đến đích) và xử lý
+                        self.current_node_id = self.target_node_id
+                        rospy.loginfo(f"==> ĐÃ ĐẾN node {self.current_node_id}.")
+
+                        if self.current_node_id == self.navigator.end_node:
+                            rospy.loginfo("ĐÃ ĐẾN ĐÍCH CUỐI CÙNG!")
+                            self._set_state(RobotState.GOAL_REACHED)
+                        else:
+                            self._set_state(RobotState.HANDLING_EVENT)
+                            self.handle_intersection()
+                        continue # Bắt đầu vòng lặp mới với trạng thái mới
 
                 # --- BƯỚC 2: LOGIC "NHÌN XA HƠN" VỚI ROI DỰ BÁO ---
                 # Nếu LiDAR im lặng, kiểm tra xem vạch kẻ có sắp biến mất ở phía xa không.
@@ -545,9 +553,15 @@ class JetBotController:
 
                 if lookahead_line_center is None:
                     rospy.logwarn("SỰ KIỆN (Dự báo): Vạch kẻ đường biến mất ở phía xa. Chuẩn bị vào giao lộ.")
-                    # Hành động phòng ngừa: chuyển sang trạng thái đi thẳng vào giao lộ.
-                    self._set_state(RobotState.APPROACHING_INTERSECTION)
-                    continue # Bắt đầu vòng lặp mới với trạng thái mới
+                    now = rospy.get_time()
+                    if (now - self.last_intersection_time) < self.INTERSECTION_COOLDOWN:
+                        # Chưa đủ 3s -> bỏ qua trigger, tiếp tục bám line
+                        # (có thể log nhẹ để debug)
+                        rospy.logwarn_throttle(2.0, "Cooldown giao lộ: chưa đủ 3s, bỏ qua trigger.")
+                    else:
+                        # Hành động phòng ngừa: chuyển sang trạng thái đi thẳng vào giao lộ.
+                        self._set_state(RobotState.APPROACHING_INTERSECTION)
+                        continue # Bắt đầu vòng lặp mới với trạng thái mới
 
                 # --- BƯỚC 3: BÁM LINE BÌNH THƯỜNG (NẾU PHÍA TRƯỚC AN TOÀN) ---
                 # Chỉ khi cả LiDAR và ROI Dự báo đều ổn, ta mới thực hiện bám line.
