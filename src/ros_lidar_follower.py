@@ -284,7 +284,7 @@ class JetBotController:
 
 
     def setup_parameters(self):
-        self.INTERSECTION_COOLDOWN = 3.0  # phải qua 3s mới cho phép vào giao lộ mới
+        self.INTERSECTION_COOLDOWN = 6.0  # phải qua 3s mới cho phép vào giao lộ mới
         self.WIDTH, self.HEIGHT = 300, 300
         self.BASE_SPEED = 0.16
         self.TURN_SPEED = 0.19
@@ -497,7 +497,7 @@ class JetBotController:
                     if (now - self.last_intersection_time) < self.INTERSECTION_COOLDOWN:
                         # Chưa đủ 3s -> bỏ qua trigger, tiếp tục bám line
                         # (có thể log nhẹ để debug)
-                        rospy.logwarn_throttle(2.0, "Cooldown giao lộ: chưa đủ 3s, bỏ qua trigger.")
+                        rospy.logwarn_throttle(2.0, "Cooldown giao lộ: chưa đủ 5s, bỏ qua trigger.")
                     else:
                         rospy.loginfo("SỰ KIỆN (LiDAR): Phát hiện giao lộ. Dừng ngay lập tức.")
                         self.robot.stop()
