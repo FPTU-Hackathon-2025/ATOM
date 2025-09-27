@@ -18,7 +18,7 @@ print(model)
 import cpuinfo
 cpuinfo.get_cpu_info = lambda: {"brand_raw": "Unknown CPU"}
 
-model.export(format="onnx", opset=12, imgsz=640, verbose=False)
+model.export(format="onnx", opset=12, imgsz=640, verbose=False, half=True, device='0')
 
 import onnx
 
