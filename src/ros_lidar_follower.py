@@ -34,7 +34,6 @@ class Direction(Enum):
 
 class JetBotController:
     def __init__(self):
-        rospy.loginfo("Đang khởi tạo JetBot Event-Driven Controller...")
         self.setup_parameters()
         self.initialize_hardware()
         self.initialize_yolo()
