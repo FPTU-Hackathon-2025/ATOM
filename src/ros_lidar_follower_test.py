@@ -389,10 +389,9 @@ class JetBotController:
             # ===================================================================
 
 
-                image_info = self.latest_image
-                detections = self.detect_with_yolo(image_info)
-                rospy.loginfo(detections)
-                time.sleep(0.2)
+                # image_info = self.latest_image
+                # detections = self.detect_with_yolo(image_info)
+                # rospy.loginfo(detections)
 
 
             # elif self.current_state == RobotState.APPROACHING_INTERSECTION:
