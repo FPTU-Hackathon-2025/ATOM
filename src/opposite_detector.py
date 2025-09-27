@@ -122,30 +122,49 @@ class SimpleOppositeDetector:
                 if angle_diff >= self.min_opposite_distance and self.are_opposite(obj1['center_angle'], obj2['center_angle']):
                     opposite_pairs.append({'object1': obj1, 'object2': obj2, 'angle_difference': angle_diff})
         return opposite_pairs
-    
+
+    def is_pair_in_desired_direction(self, angle1, angle2, desired_directions, tolerance=15.0):
+        # desired_directions: list of tuples, e.g., [(135, 315)] for NW-SE
+        a1 = angle1 % 360
+        a2 = angle2 % 360
+        for dir1, dir2 in desired_directions:
+            if (abs(a1 - dir1) <= tolerance and abs(a2 - dir2) <= tolerance) or \
+                    (abs(a2 - dir1) <= tolerance and abs(a1 - dir2) <= tolerance):
+                return True
+        return False
+
     def process_detection(self):
         if self.latest_scan is None: return
         scan = self.latest_scan
         timestamp = rospy.get_time()
         all_objects = self.find_all_objects(scan)
         if len(all_objects) < 2: return
-        
+
         opposite_pairs = self.find_opposite_pairs(all_objects)
-        
-        if opposite_pairs:
-            opposite_pairs.sort(key=lambda x: abs(x['angle_difference'] - 180.0))
-            best_pair = opposite_pairs[0]
-            # rospy.loginfo("[%.1f] *** OPPOSITE OBJECTS DETECTED ***", timestamp)
-            # Tạo và gửi tin nhắn
+        # Define desired directions (NW-SE and SW-NE)
+        desired_directions = [(135, 315), (45, 225)]  # degrees
+
+        filtered_pairs = [
+            pair for pair in opposite_pairs
+            if self.is_pair_in_desired_direction(
+                pair['object1']['center_angle'],
+                pair['object2']['center_angle'],
+                desired_directions
+            )
+        ]
+
+        if filtered_pairs:
+            filtered_pairs.sort(key=lambda x: abs(x['angle_difference'] - 180.0))
+            best_pair = filtered_pairs[0]
             notification = {
                 "timestamp": timestamp,
                 "detection_type": 'OPPOSITE_OBJECTS',
-                # ... thông tin chi tiết khác
+                # ... more details
             }
-#             self.notification_pub.publish(json.dumps(notification))
+            print("Notification:", json.dumps(notification))
             return True
         else:
-            # rospy.loginfo("[%.1f] Found %d objects, but none are opposite", timestamp, len(all_objects))
+            print("No opposite objects found in desired directions among", len(all_objects), "objects.")
             return False
 
     def detect_object_in_zone(self, zone_ranges, zone_name):
