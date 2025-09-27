@@ -761,8 +761,35 @@ class JetBotController:
         time.sleep(0.5)
 
         current_direction = self.DIRECTIONS[self.current_direction_index]
+        angle_to_sign = self.ANGLE_TO_FACE_SIGN_MAP.get(current_direction, 0)
+        self.turn_robot(angle_to_sign, False)
+        image_info = self.latest_image
+        detections = self.detect_with_yolo(image_info)
+        self.turn_robot(-angle_to_sign, False)
+        
+        prescriptive_cmds = {det['class_name'] for det in detections if det['class_name'] in self.PRESCRIPTIVE_SIGNS}
+        prohibitive_cmds = {det['class_name'] for det in detections if det['class_name'] in self.PROHIBITIVE_SIGNS}
+        data_items = [det for det in detections if det['class_name'] in self.DATA_ITEMS]
 
-    
+        # 2. Xử lý các mục dữ liệu (QR, Toán) và Publish
+        rospy.loginfo("[STEP 2] Processing data items...")
+        for item in data_items:
+            if item['class_name'] == 'qr_code':
+                # Code đọc QR thật
+                # box = item['box']; qr_image = self.latest_image[box[1]:box[3], box[0]:box[2]]
+                # decoded = decode(qr_image)
+                # if decoded: qr_data = decoded[0].data.decode('utf-8'); self.publish_data(...)
+                rospy.loginfo("Found QR Code. Publishing data...")
+                # self.publish_data({'type': 'QR_CODE', 'value': 'simulated_data_123'})
+
+                # response = requests.post(url, json=data)
+
+                # print(response.status_code)
+
+            elif item['class_name'] == 'math_problem':
+                rospy.loginfo("Found Math Problem. Solving and publishing...")
+                self.publish_data({'type': 'MATH_PROBLEM', 'value': '2+2=4'})
+        
         
         rospy.loginfo("[STEP 3] Lập kế hoạch điều hướng theo bản đồ...")
         # 3. Lập kế hoạch Điều hướng
