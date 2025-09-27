@@ -105,13 +105,12 @@ class JetBotController:
             self.video_writer = None
 
     def _compute_masks(self, image, roi_y, roi_h):
-        """Trả về (color_mask, focus_mask, final_mask) cho một ROI."""
+        """Trả về (roi_bgr, color_mask, focus_mask, final_mask) cho một ROI."""
         roi = image[roi_y: roi_y + roi_h, :]
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
 
         color_mask = cv2.inRange(hsv, self.LINE_COLOR_LOWER, self.LINE_COLOR_UPPER)
 
-        # Focus mask: chỉ giữ vùng giữa ảnh theo ROI_CENTER_WIDTH_PERCENT
         focus_mask = np.zeros_like(color_mask)
         h, w = focus_mask.shape
         center_w = int(w * self.ROI_CENTER_WIDTH_PERCENT)
@@ -120,28 +119,37 @@ class JetBotController:
         cv2.rectangle(focus_mask, (sx, 0), (ex, h), 255, -1)
 
         final_mask = cv2.bitwise_and(color_mask, focus_mask)
-        return color_mask, focus_mask, final_mask
+
+        return roi, color_mask, focus_mask, final_mask
 
 
-    def _tile3(self, m1, m2, m3, label, tile_h=90, tile_w=120):
-        """Chuyển 3 mask xám -> BGR, resize và ghép ngang thành strip kèm nhãn."""
-        # đổi GRAY -> BGR để vẽ chữ dễ/đặt lên frame màu
-        def to_bgr(m):
-            bgr = cv2.cvtColor(m, cv2.COLOR_GRAY2BGR)
-            return cv2.resize(bgr, (tile_w, tile_h), interpolation=cv2.INTER_AREA)
+    def _strip4(self, roi_bgr, color_mask, focus_mask, final_mask, label,
+                tile_h=90, tile_w=120):
+        """Ghép 4 ô: ROI | color | focus | final, có nhãn."""
+        def to_bgr(img):
+            if len(img.shape) == 2:   # mask GRAY -> BGR
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+            return cv2.resize(img, (tile_w, tile_h), interpolation=cv2.INTER_AREA)
 
-        t1, t2, t3 = to_bgr(m1), to_bgr(m2), to_bgr(m3)
-        strip = cv2.hconcat([t1, t2, t3])
-        cv2.putText(strip, label, (6, tile_h - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1, cv2.LINE_AA)
-        # nhãn cột nhỏ
-        cv2.putText(strip, "color", (5, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1, cv2.LINE_AA)
-        cv2.putText(strip, "focus", (tile_w + 5, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1, cv2.LINE_AA)
-        cv2.putText(strip, "final", (tile_w*2 + 5, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1, cv2.LINE_AA)
+        t_roi   = to_bgr(roi_bgr)
+        t_color = to_bgr(color_mask)
+        t_focus = to_bgr(focus_mask)
+        t_final = to_bgr(final_mask)
+
+        strip = cv2.hconcat([t_roi, t_color, t_focus, t_final])
+
+        # Nhãn tổng
+        cv2.putText(strip, label, (6, tile_h - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1, cv2.LINE_AA)
+        # Nhãn từng ô
+        off = 5; step = tile_w
+        cv2.putText(strip, "roi",   (off + step*0, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (220,220,220), 1, cv2.LINE_AA)
+        cv2.putText(strip, "color", (off + step*1, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (220,220,220), 1, cv2.LINE_AA)
+        cv2.putText(strip, "focus", (off + step*2, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (220,220,220), 1, cv2.LINE_AA)
+        cv2.putText(strip, "final", (off + step*3, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (220,220,220), 1, cv2.LINE_AA)
         return strip
 
-
     def _paste(self, dst, tile, x, y):
-        """Dán tile vào frame ở (x,y) nếu còn chỗ."""
         H, W = dst.shape[:2]
         h, w = tile.shape[:2]
         if y + h <= H and x + w <= W:
@@ -149,50 +157,58 @@ class JetBotController:
 
 
     def draw_debug_info(self, image):
-        """Vẽ thông tin gỡ lỗi + thumbnail các mask ROI lên frame."""
         if image is None:
             return None
 
         debug_frame = image.copy()
 
-        # Viền ROI
-        cv2.rectangle(debug_frame, (0, self.ROI_Y), (self.WIDTH-1, self.ROI_Y + self.ROI_H), (0, 255, 0), 1)
-        cv2.rectangle(debug_frame, (0, self.LOOKAHEAD_ROI_Y), (self.WIDTH-1, self.LOOKAHEAD_ROI_Y + self.LOOKAHEAD_ROI_H), (0, 255, 255), 1)
+        # Vẽ khung 2 ROI
+        cv2.rectangle(debug_frame, (0, self.ROI_Y),
+                    (self.WIDTH-1, self.ROI_Y + self.ROI_H), (0, 255, 0), 1)
+        cv2.rectangle(debug_frame, (0, self.LOOKAHEAD_ROI_Y),
+                    (self.WIDTH-1, self.LOOKAHEAD_ROI_Y + self.LOOKAHEAD_ROI_H), (0, 255, 255), 1)
 
         # State text
-        state_text = f"State: {self.current_state.name if self.current_state else 'N/A'}"
-        cv2.putText(debug_frame, state_text, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+        st = f"State: {self.current_state.name if self.current_state else 'N/A'}"
+        cv2.putText(debug_frame, st, (10, 20), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5, (255, 255, 255), 1, cv2.LINE_AA)
 
-        # Tính line_center ở ROI chính -> vẽ đường đỏ
+        # Vẽ line center ở ROI chính (nếu đang bám line)
         if self.current_state == RobotState.DRIVING_STRAIGHT:
-            line_center = self._get_line_center(image, self.ROI_Y, self.ROI_H)
-            if line_center is not None:
-                cv2.line(debug_frame, (line_center, self.ROI_Y), (line_center, self.ROI_Y + self.ROI_H), (0, 0, 255), 2)
+            lc = self._get_line_center(image, self.ROI_Y, self.ROI_H)
+            if lc is not None:
+                cv2.line(debug_frame, (lc, self.ROI_Y),
+                        (lc, self.ROI_Y + self.ROI_H), (0, 0, 255), 2)
 
-        # === NEW: tính và hiển thị các mask ===
+        # === Tạo 2 strip (mỗi strip gồm 4 ô cạnh nhau) ===
         try:
-            c1, f1, g1 = self._compute_masks(image, self.ROI_Y, self.ROI_H)  # ROI chính
-            c2, f2, g2 = self._compute_masks(image, self.LOOKAHEAD_ROI_Y, self.LOOKAHEAD_ROI_H)  # ROI nhìn xa
+            roi1, c1, f1, g1 = self._compute_masks(image, self.ROI_Y, self.ROI_H)
+            roi2, c2, f2, g2 = self._compute_masks(image, self.LOOKAHEAD_ROI_Y, self.LOOKAHEAD_ROI_H)
 
-            strip1 = self._tile3(c1, f1, g1, "ROI main")
-            strip2 = self._tile3(c2, f2, g2, "ROI lookahead")
+            # Kích thước tile có thể chỉnh nhỏ lại nếu không đủ chỗ
+            tile_h, tile_w = 80, 110
+            strip_main = self._strip4(roi1, c1, f1, g1, "ROI main", tile_h, tile_w)
+            strip_look = self._strip4(roi2, c2, f2, g2, "ROI lookahead", tile_h, tile_w)
 
-            # Dán strips vào góc phải-trên (hai hàng)
             pad = 6
-            x = self.WIDTH - max(strip1.shape[1], strip2.shape[1]) - pad
+            # Dán vào góc phải, 2 hàng
+            x = self.WIDTH - max(strip_main.shape[1], strip_look.shape[1]) - pad
             y1 = pad
-            y2 = y1 + strip1.shape[0] + pad
+            y2 = y1 + strip_main.shape[0] + pad
 
-            self._paste(debug_frame, strip1, x, y1)
-            self._paste(debug_frame, strip2, x, y2)
+            self._paste(debug_frame, strip_main, x, y1)
+            self._paste(debug_frame, strip_look, x, y2)
 
-            # Gợi ý: bạn có thể lưu mask cuối để debug sâu hơn
+            # Lưu lại nếu cần debug sâu
             self._last_final_mask_main = g1
             self._last_final_mask_lookahead = g2
+
         except Exception as e:
-            cv2.putText(debug_frame, f"mask err: {e}", (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1, cv2.LINE_AA)
+            cv2.putText(debug_frame, f"mask err: {e}", (10, 40),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1, cv2.LINE_AA)
 
         return debug_frame
+
 
 
     def setup_parameters(self):
