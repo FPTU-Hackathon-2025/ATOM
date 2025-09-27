@@ -1,10 +1,10 @@
 {
   "nodes": [
-    { "id": 1, "x": 0, "y": 1, "type": "normal" },
-    { "id": 2, "x": 0, "y": 2, "type": "normal" },
+    { "id": 1, "x": 0, "y": 1, "type": "end" },
+    { "id": 2, "x": 0, "y": 2, "type": "start" },
     { "id": 3, "x": 1, "y": 0, "type": "normal" },
     { "id": 4, "x": 1, "y": 1, "type": "normal" },
-    { "id": 5, "x": 1, "y": 2, "type": "load" },
+    { "id": 5, "x": 1, "y": 2, "type": "normal" },
     { "id": 6, "x": 1, "y": 3, "type": "start" },
     { "id": 7, "x": 2, "y": 0, "type": "normal" },
     { "id": 8, "x": 2, "y": 1, "type": "load" },
@@ -12,7 +12,7 @@
     { "id": 10, "x": 2, "y": 3, "type": "normal" },
     { "id": 11, "x": 3, "y": 1, "type": "normal" },
     { "id": 12, "x": 3, "y": 2, "type": "normal" },
-    { "id": 13, "x": 3, "y": 3, "type": "end" }
+    { "id": 13, "x": 3, "y": 3, "type": "load" }
   ],
   "edges": [
     { "source": 1, "target": 2, "label": "S" },
