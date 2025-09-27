@@ -18,6 +18,7 @@ from sensor_msgs.msg import LaserScan, Image
 
 from RobotUtils import RobotUtils
 from YOLODetector import YOLODetector
+from IntersectionHandler import IntersectionHandler
 from video_utils import draw_debug_info, initialize_video_writer, camera_callback
 from opposite_detector import SimpleOppositeDetector
 
@@ -71,6 +72,27 @@ class JetBotController:
             detector=self.detector,
             mqtt_client=self.mqtt_client
         )
+        self.intersection_handler = IntersectionHandler(
+            robot=self.robot,
+            latest_image=self.latest_image,
+            yolo_detector=self.yolo_detector,
+            navigator=self.navigator,
+            robot_utils=self.robot_utils,
+            DIRECTIONS=self.DIRECTIONS,
+            current_direction_index=self.current_direction_index,
+            ANGLE_TO_FACE_SIGN_MAP=self.ANGLE_TO_FACE_SIGN_MAP,
+            PRESCRIPTIVE_SIGNS=self.PRESCRIPTIVE_SIGNS,
+            PROHIBITIVE_SIGNS=self.PROHIBITIVE_SIGNS,
+            DATA_ITEMS=self.DATA_ITEMS,
+            LABEL_TO_DIRECTION_ENUM=self.LABEL_TO_DIRECTION_ENUM,
+            planned_path=self.planned_path,
+            banned_edges=self.banned_edges,
+            target_node_id=self.target_node_id,
+            current_node_id=self.current_node_id,
+            set_state_callback=self._set_state,
+            turn_robot_callback=self.turn_robot,
+            publish_data_callback=self.publish_data
+        )
         rospy.Subscriber('/scan', LaserScan, self.detector.callback)
         rospy.Subscriber('/csi_cam_0/image_raw', Image, lambda msg: camera_callback(self, msg))
         rospy.loginfo("Đã đăng ký vào các topic /scan và /csi_cam_0/image_raw.")
@@ -92,9 +114,6 @@ class JetBotController:
         else:
             rospy.logerr("Không tìm thấy đường đi hoặc đường đi quá ngắn!")
             self._set_state(RobotState.DEAD_END)
-
-
-
 
 
     def setup_parameters(self):
@@ -233,7 +252,7 @@ class JetBotController:
                         self._set_state(RobotState.GOAL_REACHED)
                     else:
                         self._set_state(RobotState.HANDLING_EVENT)
-                        self.handle_intersection()
+                        self.intersection_handler.handle_intersection()
                     continue # Bắt đầu vòng lặp mới với trạng thái mới
 
                 # --- BƯỚC 2: LOGIC "NHÌN XA HƠN" VỚI ROI DỰ BÁO ---
@@ -278,7 +297,7 @@ class JetBotController:
                         self._set_state(RobotState.GOAL_REACHED)
                     else:
                         self._set_state(RobotState.HANDLING_EVENT)
-                        self.handle_intersection()
+                        self.intersection_handler.handle_intersection()
 
             # ===================================================================
             # TRẠNG THÁI 3: ĐANG RỜI KHỎI GIAO LỘ (LEAVING_INTERSECTION)
@@ -399,163 +418,7 @@ class JetBotController:
         right_motor = self.BASE_SPEED - adj
         self.robot.set_motors(left_motor, right_motor)
         
-    def handle_intersection(self):
-        rospy.loginfo("\n[GIAO LỘ] Dừng lại và xử lý...")
-        self.robot.stop() 
-        time.sleep(0.5)
 
-        current_direction = self.DIRECTIONS[self.current_direction_index]
-        angle_to_sign = self.ANGLE_TO_FACE_SIGN_MAP.get(current_direction, 0)
-        self.turn_robot(angle_to_sign, False)
-        image_info = self.latest_image
-        detections = self.yolo_detector.detect(image_info)
-        self.turn_robot(-angle_to_sign, False)
-        
-        prescriptive_cmds = {det['class_name'] for det in detections if det['class_name'] in self.PRESCRIPTIVE_SIGNS}
-        prohibitive_cmds = {det['class_name'] for det in detections if det['class_name'] in self.PROHIBITIVE_SIGNS}
-        data_items = [det for det in detections if det['class_name'] in self.DATA_ITEMS]
-
-        # 2. Xử lý các mục dữ liệu (QR, Toán) và Publish
-        rospy.loginfo("[STEP 2] Processing data items...")
-        for item in data_items:
-            if item['class_name'] == 'qr_code':
-                # Code đọc QR thật
-                # box = item['box']; qr_image = self.latest_image[box[1]:box[3], box[0]:box[2]]
-                # decoded = decode(qr_image)
-                # if decoded: qr_data = decoded[0].data.decode('utf-8'); self.publish_data(...)
-                rospy.loginfo("Found QR Code. Publishing data...")
-                self.publish_data({'type': 'QR_CODE', 'value': 'simulated_data_123'})
-
-                # response = requests.post(url, json=data)
-
-                # print(response.status_code)
-
-            elif item['class_name'] == 'math_problem':
-                rospy.loginfo("Found Math Problem. Solving and publishing...")
-                self.publish_data({'type': 'MATH_PROBLEM', 'value': '2+2=4'})
-        
-        
-        rospy.loginfo("[STEP 3] Lập kế hoạch điều hướng theo bản đồ...")
-        # 3. Lập kế hoạch Điều hướng
-        final_decision = None
-        is_deviation = False 
-
-        while True:
-            planned_direction_label = self.navigator.get_next_direction_label(self.current_node_id, self.planned_path)
-            if not planned_direction_label:
-                rospy.logerr("Lỗi kế hoạch: Không tìm thấy bước tiếp theo.") 
-                self._set_state(RobotState.DEAD_END) 
-                return
-            
-            planned_action = self.robot_utils.map_absolute_to_relative(planned_direction_label, current_direction)
-            rospy.loginfo(f"Kế hoạch A* đề xuất: Đi {planned_action} (hướng {planned_direction_label})")
-
-            # Ưu tiên 1: Biển báo bắt buộc
-            intended_action = None
-            if 'L' in prescriptive_cmds: intended_action = 'left'
-            elif 'R' in prescriptive_cmds: intended_action = 'right'
-            elif 'F' in prescriptive_cmds: intended_action = 'straight'
-            
-            # Ưu tiên 2: Plan
-            if intended_action is None:
-                intended_action = planned_action
-            else:
-                # Nếu hành động bắt buộc khác với kế hoạch, đánh dấu là đi chệch hướng
-                if intended_action != planned_action:
-                    is_deviation = True
-                    rospy.logwarn(f"CHỆCH HƯỚNG! Biển báo bắt buộc ({intended_action}) khác với kế hoạch ({planned_action}).")
-
-            # 3.3. Veto bởi biển báo cấm
-            is_prohibited = (intended_action == 'straight' and 'NF' in prohibitive_cmds) or \
-                            (intended_action == 'right' and 'NR' in prohibitive_cmds) or \
-                            (intended_action == 'left' and 'NL' in prohibitive_cmds)
-
-            if is_prohibited:
-                rospy.logwarn(f"Hành động dự định '{intended_action}' bị CẤM!")
-                
-                # Nếu hành động bị cấm đến từ biển báo bắt buộc -> Lỗi bản đồ
-                if is_deviation:
-                    rospy.logerr("LỖI BẢN ĐỒ! Biển báo bắt buộc mâu thuẫn với biển báo cấm. Không thể đi tiếp.")
-                    self._set_state(RobotState.DEAD_END) 
-                    return
-                
-                # Nếu hành động bị cấm đến từ kế hoạch A* -> Tìm đường lại
-                banned_edge = (self.current_node_id, self.planned_path[self.planned_path.index(self.current_node_id) + 1])
-                if banned_edge not in self.banned_edges:
-                    self.banned_edges.append(banned_edge)
-                
-                rospy.loginfo(f"Thêm cạnh cấm {banned_edge} và tìm đường lại...")
-                new_path = self.navigator.find_path(self.current_node_id, self.navigator.end_node, self.banned_edges)
-                
-                if new_path:
-                    self.planned_path = new_path
-                    rospy.loginfo(f"Đã tìm thấy đường đi mới: {self.planned_path}")
-                    continue # Quay lại đầu vòng lặp để kiểm tra với kế hoạch mới
-                else:
-                    rospy.logerr("Không thể tìm đường đi mới sau khi gặp biển cấm.")
-                    self._set_state(RobotState.DEAD_END)
-                    return
-            
-            final_decision = intended_action
-            break 
-
-        # 4. Thực thi quyết định
-        if final_decision == 'straight': 
-            rospy.loginfo("[FINAL] Decision: Go STRAIGHT.")
-        elif final_decision == 'right': 
-            rospy.loginfo("[FINAL] Decision: Turn RIGHT.") 
-            self.turn_robot(90, True)
-        elif final_decision == 'left': 
-            rospy.loginfo("[FINAL] Decision: Turn LEFT.") 
-            self.turn_robot(-90, True)
-        else:
-            rospy.logwarn("[!!!] DEAD END! No valid paths found.") 
-            self._set_state(RobotState.DEAD_END)
-            return
-        
-        # 5. Cập nhật trạng thái robot sau khi thực hiện
-        # 5.1. Xác định node tiếp theo
-        next_node_id = None
-        if not is_deviation:
-            # Nếu đi theo kế hoạch, chỉ cần lấy node tiếp theo từ path
-            next_node_id = self.planned_path[self.planned_path.index(self.current_node_id) + 1]
-        else:
-            # Nếu chệch hướng, phải tìm node tiếp theo dựa trên hành động đã thực hiện
-            
-            new_robot_direction = self.DIRECTIONS[self.current_direction_index] 
-            
-            executed_direction_label = None
-            for label, direction_enum in self.LABEL_TO_DIRECTION_ENUM.items():
-                if direction_enum == new_robot_direction:
-                    executed_direction_label = label 
-                    break
-            
-            if executed_direction_label is None:
-                rospy.logerr("Lỗi logic: Không thể tìm thấy label cho hướng đi mới của robot.") 
-                self._set_state(RobotState.DEAD_END) 
-                return
-
-            next_node_id = self.navigator.get_neighbor_by_direction(self.current_node_id, executed_direction_label)
-            if next_node_id is None:
-                 rospy.logerr("LỖI BẢN ĐỒ! Đã thực hiện rẽ nhưng không có node tương ứng.")
-                 self._set_state(RobotState.DEAD_END)
-                 return
-            
-            # Quan trọng: Lập kế hoạch lại từ vị trí mới
-            rospy.loginfo(f"Đã đi chệch kế hoạch. Lập lại đường đi từ node mới {next_node_id}...")
-            new_path = self.navigator.find_path(next_node_id, self.navigator.end_node, self.banned_edges)
-            if new_path:
-                self.planned_path = new_path
-                rospy.loginfo(f"Đường đi mới sau khi chệch hướng: {self.planned_path}")
-            else:
-                rospy.logerr("Không thể tìm đường về đích từ vị trí mới.")
-                self._set_state(RobotState.DEAD_END)
-                return
-
-        self.target_node_id = next_node_id
-        rospy.loginfo(f"==> Đang di chuyển đến node tiếp theo: {self.target_node_id}")
-        self._set_state(RobotState.LEAVING_INTERSECTION)
-    
     def turn_robot(self, degrees, update_main_direction=True):
         duration = abs(degrees) / 90.0 * self.TURN_DURATION_90_DEG
         if degrees > 0: 
