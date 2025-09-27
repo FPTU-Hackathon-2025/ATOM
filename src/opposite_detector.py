@@ -135,11 +135,13 @@ class SimpleOppositeDetector:
         if opposite_pairs:
             opposite_pairs.sort(key=lambda x: abs(x['angle_difference'] - 180.0))
             best_pair = opposite_pairs[0]
-            # rospy.loginfo("[%.1f] *** OPPOSITE OBJECTS DETECTED ***", timestamp)
-            # Tạo và gửi tin nhắn
+            # In ra thông tin chi tiết
+            rospy.loginfo("[%.1f] *** OPPOSITE OBJECTS DETECTED ***", timestamp)
+            rospy.loginfo(json.dumps(best_pair, indent=2))
             notification = {
                 "timestamp": timestamp,
                 "detection_type": 'OPPOSITE_OBJECTS',
+                "best_pair": best_pair
                 # ... thông tin chi tiết khác
             }
 #             self.notification_pub.publish(json.dumps(notification))
@@ -167,8 +169,8 @@ class SimpleOppositeDetector:
         cluster_distances = [valid_ranges[i] for i in largest_cluster]
         return {'distance': np.mean(cluster_distances), 'point_count': len(largest_cluster), 'zone': zone_name}
 
-# if __name__ == '__main__':
-#     rospy.init_node('opposite_detector_node', anonymous=True)
-#     detector = SimpleOppositeDetector()
-#     rospy.loginfo("Opposite Detector Node is running. Use services to control.")
-#     rospy.spin()
+if __name__ == '__main__':
+    rospy.init_node('opposite_detector_node', anonymous=True)
+    detector = SimpleOppositeDetector()
+    rospy.loginfo("Opposite Detector Node is running. Use services to control.")
+    rospy.spin()
