@@ -43,7 +43,7 @@ class JetBotController:
         self.video_writer = None
         self.initialize_video_writer()
 
-        self.navigator = MapNavigator(self.MAP_FILE_PATH)
+        self.navigator = MapNavigator(self.MAP_TYPE)
         self.current_node_id = self.navigator.start_node
         self.target_node_id = None
         self.planned_path = None
@@ -154,7 +154,7 @@ class JetBotController:
         self.current_direction_index = 1
         self.ANGLE_TO_FACE_SIGN_MAP = {d: a for d, a in zip(self.DIRECTIONS, [45, -45, -135, 135])}
         self.MAX_CORRECTION_ADJ = 0.12
-        self.MAP_FILE_PATH = "map.json"
+        self.MAP_TYPE = "map_z"
         self.LABEL_TO_DIRECTION_ENUM = {'N': Direction.NORTH, 'E': Direction.EAST, 'S': Direction.SOUTH, 'W': Direction.WEST}
         self.VIDEO_OUTPUT_FILENAME = 'jetbot_run.mp4'
         self.VIDEO_FPS = 20  # Nên khớp với rospy.Rate của bạn
@@ -629,8 +629,42 @@ class JetBotController:
                 rospy.loginfo("Found QR Code. Publishing data...")
                 self.publish_data({'type': 'QR_CODE', 'value': 'simulated_data_123'})
 
-                # response = requests.post(url, json=data)
+                # TODO: viết code submit to server
+                # 4.1.3 Cách gửi dữ liệu cho Server
+                # 4.1.3.1 Thông Tin Endpoint
+                # URL: /api/sign-submissions/submit/
+                # Method: POST
+                # Content-Type: application/json
+                # 14
+                # 4.1.3.2 Cấu Trúc Request Body
+                # {
+                #  "text": "Nội dung Symbol đã nhận diện",
+                #  "node_id": "ID của node/vị trí phát hiện Symbol",
+                #  "token": "Token xác thực của đội thi"
+                #  "map_type": “Map đang chạy, VD: map_a, map_b, map_c,
+                # map_z”
+                # }
+                # 4.1.3.3 Response
+                # Thành công (Status Code: 201)
+                # {
+                #  "text": "Nội dung Symbol đã submit",
+                #  "race": 1,
+                #  "node_id": 1,
+                #  "submit_at": "2024-01-20T10:30:00Z",
+                #  "team": "Tên đội thi"
+                #  "Map_type": “Map đã submit lên”
+                # }
+                # Lỗi thường gặp - Token không hợp lệ (Status Code: 401)
+                # {
+                #  "detail": "Invalid token"
+                # }
+                # Lỗi thường gặp - Thiếu trường bắt buộc (Status Code: 400)
+                # {
+                #  "field_name": ["This field is required."]
+                # }
 
+                # response = requests.post(mapUrl, json=data)
+                #
                 # print(response.status_code)
 
             elif item['class_name'] == 'math_problem':

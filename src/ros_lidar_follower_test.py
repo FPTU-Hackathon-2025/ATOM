@@ -44,7 +44,7 @@ class JetBotController:
         self.video_writer = None
         self.initialize_video_writer()
 
-        self.navigator = MapNavigator(self.MAP_FILE_PATH)
+        self.navigator = MapNavigator(self.MAP_TYPE)
         self.current_node_id = self.navigator.start_node
         self.target_node_id = None
         self.planned_path = None
@@ -161,7 +161,7 @@ class JetBotController:
         self.current_direction_index = 1
         self.ANGLE_TO_FACE_SIGN_MAP = {d: a for d, a in zip(self.DIRECTIONS, [45, -45, -135, 135])}
         self.MAX_CORRECTION_ADJ = 0.12
-        self.MAP_FILE_PATH = "map.json"
+        self.MAP_TYPE = "map_z"
         self.LABEL_TO_DIRECTION_ENUM = {'N': Direction.NORTH, 'E': Direction.EAST, 'S': Direction.SOUTH, 'W': Direction.WEST}
         self.VIDEO_OUTPUT_FILENAME = 'jetbot_run.avi'
         self.VIDEO_FPS = 20  # Nên khớp với rospy.Rate của bạn

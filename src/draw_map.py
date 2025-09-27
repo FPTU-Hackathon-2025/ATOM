@@ -11,11 +11,11 @@ logging.basicConfig(
     datefmt="%H:%M:%S"
 )
 
-def draw_map(json_file):
-    logging.info(f"Đang tải bản đồ từ file: {json_file}")
+def draw_map(map_type):
+    logging.info(f"Đang tải bản đồ từ file: {map_type}")
 
     # Load bản đồ bằng MapNavigator
-    nav = MapNavigator(json_file)
+    nav = MapNavigator(map_type)
     G = nav.graph
     logging.info(f"Số node: {len(G.nodes)}, số cạnh: {len(G.edges)}")
 
@@ -60,6 +60,6 @@ def draw_map(json_file):
     plt.title("Bản đồ và đường đi (Map Navigator)")
     plt.show()
 
-
 if __name__ == "__main__":
-    draw_map("map.json")
+    map_type = "map_z"
+    draw_map(map_type)
