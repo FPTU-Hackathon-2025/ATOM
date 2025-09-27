@@ -9,7 +9,7 @@
     { "id": 7, "x": 2, "y": 0, "type": "load" },
     { "id": 8, "x": 2, "y": 1, "type": "load" },
     { "id": 9, "x": 2, "y": 2, "type": "normal" },
-    { "id": 10, "x": 2, "y": 3, "type": "load" },
+    { "id": 10, "x": 2, "y": 3, "type": "normal" },
     { "id": 11, "x": 3, "y": 1, "type": "end" },
     { "id": 12, "x": 3, "y": 2, "type": "normal" },
     { "id": 13, "x": 3, "y": 3, "type": "normal" }
