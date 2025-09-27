@@ -184,8 +184,8 @@ class JetBotController:
     def initialize_yolo(self):
         """Tải mô hình YOLO vào ONNX Runtime."""
         try:
-            self.yolo_session = ort.InferenceSession(self.YOLO_MODEL_PATH, providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
-            rospy.loginfo("Tải mô hình YOLO thành công.")
+            # self.yolo_session = ort.InferenceSession(self.YOLO_MODEL_PATH, providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+            rospy.loginfo("không tải YOLO t")
         except Exception as e:
             rospy.logerr(f"Không thể tải mô hình YOLO từ '{self.YOLO_MODEL_PATH}'. Lỗi: {e}")
             self.yolo_session = None
