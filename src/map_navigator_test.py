@@ -30,9 +30,9 @@ class MapNavigator:
         for node in data['nodes']:
             self.nodes_data[node['id']] = node
             self.graph.add_node(node['id'], **node)
-            if node['type'] == 'start':
+            if node['type'].lower() == 'start':
                 self.start_node = node['id']
-            elif node['type'] == 'end':
+            elif node['type'].lower() == 'end':
                 self.end_node = node['id']
 
         for edge in data['edges']:

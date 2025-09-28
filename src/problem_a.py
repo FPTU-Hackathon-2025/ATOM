@@ -317,7 +317,9 @@ class JetBotController:
         self.YOLO_CLASS_NAMES = ['N', 'E', 'W', 'S', 'NN', 'NE', 'NW', 'NS', 'math']
         self.PRESCRIPTIVE_SIGNS = {'N', 'E', 'W', 'S'}
         self.PROHIBITIVE_SIGNS = {'NN', 'NE', 'NW', 'NS'}
-        self.DATA_ITEMS = {'qr_code', 'math_problem'}
+        self.DATA_ITEMS = {'qr_code', 'math_problem', 'math', 'L', 'E', 'NS', 'S', 'N', 'W', 'NW', 'NE', 'NN',
+                           'triangle', 'diamond', 'octagon', 'rocket', 'hexagon', 'lollipop', 'umbrella',
+                           'corona', 'reddiamond', 'square', 'circle', 'star', 'barcode'}
         self.MQTT_BROKER = "localhost"
         self.MQTT_PORT = 1883
         self.MQTT_DATA_TOPIC = "jetbot/corrected_event_data"
@@ -797,6 +799,7 @@ class JetBotController:
         angle_to_sign = self.ANGLE_TO_FACE_SIGN_MAP.get(current_direction, 0)
         self.turn_robot(angle_to_sign, False)
         image_info = self.latest_image
+        # NOTE: bỏ đi với problem a nếu cần (Không dùng đến do map không có điểm Load)
         detections = self.detect_with_yolo(image_info)
         self.turn_robot(-angle_to_sign, False)
 
@@ -807,7 +810,13 @@ class JetBotController:
         # 2. Xử lý các mục dữ liệu (QR, Toán) và Publish
         rospy.loginfo("[STEP 2] Processing data items...")
         for item in data_items:
-            if item['class_name'] == 'qr_code':
+            boxes = item['boxes']
+            if len(boxes) > 1:
+                finalText = '_'.join(sorted([box['class_name'].upper() for box in boxes]))
+            else:
+                finalText = boxes[0]['class_name'].upper()
+
+            if finalText == 'QR_CODE':
                 rospy.loginfo("Found QR Code. Publishing data...")
                 # TODO: thay text và node_id bằng dữ liệu thực tế
                 body = {
@@ -816,11 +825,29 @@ class JetBotController:
                     "token": token,
                     "map_type": map_type
                 }
-                self.publish_data(body)
-            elif item['class_name'] == 'math_problem':
+            elif finalText == 'MATH_PROBLEM' or finalText == 'MATH':
                 rospy.loginfo("Found Math Problem. Solving and publishing...")
-                self.publish_data({'type': 'MATH_PROBLEM', 'value': '2+2=4'})
+                # TODO: Giải toán và thay text bằng kết quả thực tế
+                body = {
+                    "text": "1",
+                    "node_id": self.current_node_id,
+                    "token": token,
+                    "map_type": map_type
+                }
+            else:
+                rospy.loginfo("Found Object Image. Publishing data...")
+                body = {
+                    "text": finalText,
+                    "node_id": self.current_node_id,
+                    "token": token,
+                    "map_type": map_type
+                }
 
+            try:
+                self.publish_data(body)
+                rospy.loginfo(f"Published data for {finalText}.")
+            except Exception as e:
+                rospy.logerr(f"Failed to publish data for {finalText}: {e}")
 
         rospy.loginfo("[STEP 3] Lập kế hoạch điều hướng theo bản đồ...")
         # 3. Lập kế hoạch Điều hướng
