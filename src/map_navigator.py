@@ -94,7 +94,7 @@ class MapNavigator:
             graph_to_search.remove_edges_from(banned_edges)
 
         # Lấy danh sách load nodes
-        load_nodes = [n for n, d in self.nodes_data.items() if d["type"] == "load"]
+        load_nodes = [n for n, d in self.nodes_data.items() if d["type"].lower() == "load"]
 
         # Trường hợp không có load node -> chạy A* như cũ
         if not load_nodes:

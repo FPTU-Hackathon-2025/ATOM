@@ -27,13 +27,13 @@ def draw_map(map_type):
     # Vẽ tất cả các node
     node_colors = []
     for node_id, data in nav.nodes_data.items():
-        if data["type"] == "start":
+        if data["type"].lower() == "start":
             node_colors.append("green")
             logging.info(f"Node START: {node_id} tại ({data['x']}, {data['y']})")
-        elif data["type"] == "end":
+        elif data["type"].lower() == "end":
             node_colors.append("red")
             logging.info(f"Node END: {node_id} tại ({data['x']}, {data['y']})")
-        elif data["type"] == "load":
+        elif data["type"].lower() == "load":
             node_colors.append("purple")
             logging.info(f"Node LOAD: {node_id} tại ({data['x']}, {data['y']})")
         else:
