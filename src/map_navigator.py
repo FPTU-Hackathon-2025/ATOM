@@ -75,6 +75,10 @@ class MapNavigator:
         except ValueError as e:
             raise RuntimeError(f"Invalid map data: {e}")
 
+    def get_node(self, node_id):
+        """Trả về thông tin của node theo ID."""
+        return self.nodes_data.get(node_id, None)
+
     def _heuristic(self, node1_id, node2_id):
         """Hàm heuristic (khoảng cách Euclid) cho thuật toán A*."""
         pos1 = self.nodes_data[node1_id]
