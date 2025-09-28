@@ -821,10 +821,12 @@ class JetBotController:
 
         current_direction = self.DIRECTIONS[self.current_direction_index]
         angle_to_sign = self.ANGLE_TO_FACE_SIGN_MAP.get(current_direction, 0)
-        self.turn_robot(angle_to_sign, False)
+
+        #bắt buộc đọc biển báo
+        self.turn_robot(angle_to_sign -90,False)
         image_info = self.latest_image
         detections = self.detect_with_yolo(image_info)
-        self.turn_robot(-angle_to_sign, False)
+        self.turn_robot(-angle_to_sign +90, False)
 
         prescriptive_cmds = {det['class_name'] for det in detections if det['class_name'] in self.PRESCRIPTIVE_SIGNS}
         prohibitive_cmds = {det['class_name'] for det in detections if det['class_name'] in self.PROHIBITIVE_SIGNS}
