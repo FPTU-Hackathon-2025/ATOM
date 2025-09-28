@@ -34,24 +34,24 @@ class MapNavigator:
         try:
             
               
-            with open("./map.json", "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if not data:
-                raise ValueError("No data found in the API response.")
+            # with open("./map.json", "r", encoding="utf-8") as f:
+            #     data = json.load(f)
+            # if not data:
+            #     raise ValueError("No data found in the API response.")
           
             # URL: /api/maps/get_active_map/?token=[Team’s
             # Token]&map_type=[Map type]
             # Method: GET
             # Content-Type: application/json
 
-            # headers = {
-            #     "Content-Type": "application/json",
-            #     "User-Agent": "Python-requests/2.28.1"
-            # }
-            # response = requests.get(url, params={"map_type": map_type, "token": token}, headers=headers)
-            # response.raise_for_status()  # Raise error for non-200 status codes
+            headers = {
+                "Content-Type": "application/json",
+                "User-Agent": "Python-requests/2.28.1"
+            }
+            response = requests.get(url, params={"map_type": map_type, "token": token}, headers=headers)
+            response.raise_for_status()  # Raise error for non-200 status codes
 
-            # data = response.json()
+            data = response.json()
             
           
 
