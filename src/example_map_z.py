@@ -820,9 +820,9 @@ class JetBotController:
         # 2. Xử lý các mục dữ liệu (QR, Toán) và Publish
         rospy.loginfo("[STEP 2] Processing data items...")
         if len(data_items) > 1:
-            finalText = '_'.join(sorted(data.upper() for data in data_items))
+            finalText = '_'.join(sorted(data['class_name'].upper() for data in data_items))
         else:
-            finalText = data_items[0].upper()
+            finalText = data_items[0]['class_name'].upper()
         if finalText == 'QR_CODE':
             rospy.loginfo("Found QR Code. Publishing data...")
             # TODO: thay text và node_id bằng dữ liệu thực tế
