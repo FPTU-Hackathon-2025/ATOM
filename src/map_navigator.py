@@ -3,6 +3,7 @@
 
 import json
 import networkx as nx
+import heapq
 import math
 from itertools import permutations
 
@@ -31,6 +32,13 @@ class MapNavigator:
     #  thì truyền tham số map_type khác nhau (a, b, c)
     def _load_map(self, map_type):
         try:
+            
+              
+            # with open("./map.json", "r", encoding="utf-8") as f:
+            #     data = json.load(f)
+            # if not data:
+            #     raise ValueError("No data found in the API response.")
+          
             # URL: /api/maps/get_active_map/?token=[Team’s
             # Token]&map_type=[Map type]
             # Method: GET
@@ -44,9 +52,8 @@ class MapNavigator:
             response.raise_for_status()  # Raise error for non-200 status codes
 
             data = response.json()
-
-            if not data:
-                raise ValueError("No data found in the API response.")
+            
+          
 
             for node in data['nodes']:
                 self.nodes_data[node['id']] = node
@@ -81,22 +88,23 @@ class MapNavigator:
 
     def find_path(self, start_node_id, end_node_id, banned_edges=None):
         """
-        Tìm đường đi từ start -> tất cả các load nodes (nếu có) -> end bằng A*.
-        Nếu không có load node, hoạt động như tìm đường ngắn nhất bình thường.
+        Tìm đường đi từ start -> tất cả các load nodes (nếu có) -> end bằng A* liên tục.
+        Không quay lại node vừa đi.
+        
         :param start_node_id: ID của node bắt đầu.
         :param end_node_id: ID của node kết thúc.
         :param banned_edges: List các cạnh (u, v) bị cấm, dùng để tìm đường lại.
         :return: List các ID node trên đường đi, hoặc None nếu không có đường.
         """
-        # Chuẩn bị graph tạm (có thể loại bỏ banned_edges nếu có)
+        # Chuẩn bị graph tạm (loại bỏ banned_edges nếu có)
         graph_to_search = self.graph.copy()
         if banned_edges:
             graph_to_search.remove_edges_from(banned_edges)
-
+        
         # Lấy danh sách load nodes
-        load_nodes = [n for n, d in self.nodes_data.items() if d["type"].lower() == "load"]
+        load_nodes = {n for n, d in self.nodes_data.items() if d["type"].lower() == "load"}
 
-        # Trường hợp không có load node -> chạy A* như cũ
+        # Trường hợp không có load node -> dùng A* bình thường
         if not load_nodes:
             try:
                 return nx.astar_path(
@@ -108,45 +116,44 @@ class MapNavigator:
             except nx.NetworkXNoPath:
                 return None
 
-        # Có load nodes -> phải đi qua tất cả
-        best_path = None
-        best_length = float("inf")
+        # A* liên tục với trạng thái (current, parent, path, visited_loads)
+        frontier = []
+        heapq.heappush(frontier, (0, start_node_id, None, [start_node_id], set()))
+        visited_states = set()  # để tránh vòng lặp, lưu (current, frozenset(visited_loads))
 
-        for order in permutations(load_nodes):
-            candidate_path = []
-            valid = True
+        while frontier:
+            f_score, current, parent, path, visited_loads = heapq.heappop(frontier)
 
-            # 1. start -> load đầu tiên
-            try:
-                sub_path = nx.astar_path(graph_to_search, start_node_id, order[0], heuristic=self._heuristic)
-            except nx.NetworkXNoPath:
+            # Cập nhật visited_loads nếu node hiện tại là load node
+            if current in load_nodes:
+                visited_loads = visited_loads | {current}
+
+            # Kiểm tra điều kiện kết thúc
+            if current == end_node_id and visited_loads == load_nodes:
+                return path
+
+            state_id = (current, frozenset(visited_loads))
+            if state_id in visited_states:
                 continue
-            candidate_path.extend(sub_path)
+            visited_states.add(state_id)
 
-            # 2. đi qua các load tiếp theo
-            for i in range(len(order) - 1):
-                try:
-                    sub_path = nx.astar_path(graph_to_search, order[i], order[i+1], heuristic=self._heuristic)
-                    candidate_path.extend(sub_path[1:])  # bỏ node trùng
-                except nx.NetworkXNoPath:
-                    valid = False
-                    break
-            if not valid:
-                continue
+            # Duyệt các neighbor
+            for neighbor in graph_to_search.neighbors(current):
+                # Không đi lùi: neighbor không phải parent
+                if neighbor == parent:
+                    continue
 
-            # 3. load cuối -> end
-            try:
-                sub_path = nx.astar_path(graph_to_search, order[-1], end_node_id, heuristic=self._heuristic)
-                candidate_path.extend(sub_path[1:])
-            except nx.NetworkXNoPath:
-                continue
+                # Tạo path mới
+                new_path = path + [neighbor]
 
-            # Đánh giá độ dài
-            if len(candidate_path) < best_length:
-                best_length = len(candidate_path)
-                best_path = candidate_path
+                # Tính f_score = g + h, g = len path, h = heuristic
+                g = len(new_path)
+                h = self._heuristic(neighbor, end_node_id)
+                heapq.heappush(frontier, (g + h, neighbor, current, new_path, visited_loads))
 
-        return best_path
+        # Không tìm được đường hợp lệ
+        return None
+
 
     def get_next_direction_label(self, current_node_id, path):
         """
