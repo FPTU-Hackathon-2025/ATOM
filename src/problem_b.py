@@ -805,51 +805,49 @@ class JetBotController:
             detections = self.detect_with_yolo(image_info)
             self.turn_robot(-angle_to_sign - 90, False)
 
-        prescriptive_cmds = {det['class_name'] for det in detections if det['class_name'] in self.PRESCRIPTIVE_SIGNS}
-        prohibitive_cmds = {det['class_name'] for det in detections if det['class_name'] in self.PROHIBITIVE_SIGNS}
-        data_items = [det for det in detections if det['class_name'] in self.DATA_ITEMS]
+        boxes = detections['boxes']
+        prescriptive_cmds = {det['class_name'] for det in boxes if det['class_name'] in self.PRESCRIPTIVE_SIGNS}
+        prohibitive_cmds = {det['class_name'] for det in boxes if det['class_name'] in self.PROHIBITIVE_SIGNS}
+        data_items = [det for det in boxes if det['class_name'] in self.DATA_ITEMS]
 
         # 2. Xử lý các mục dữ liệu (QR, Toán) và Publish
         rospy.loginfo("[STEP 2] Processing data items...")
-        for item in data_items:
-            boxes = item['boxes']
-            if len(boxes) > 1:
-                finalText = '_'.join(sorted([box['class_name'].upper() for box in boxes]))
-            else:
-                finalText = boxes[0]['class_name'].upper()
+        if len(data_items) > 1:
+            finalText = '_'.join(sorted([box['class_name'].upper() for box in data_items]))
+        else:
+            finalText = boxes[0]['class_name'].upper()
+        if finalText == 'QR_CODE':
+            rospy.loginfo("Found QR Code. Publishing data...")
+            # TODO: thay text và node_id bằng dữ liệu thực tế
+            body = {
+                "text": "QR Code",
+                "node_id": self.current_node_id,
+                "token": token,
+                "map_type": map_type
+            }
+        elif finalText == 'MATH_PROBLEM' or finalText == 'MATH':
+            rospy.loginfo("Found Math Problem. Solving and publishing...")
+            # TODO: Giải toán và thay text bằng kết quả thực tế
+            body = {
+                "text": "1",
+                "node_id": self.current_node_id,
+                "token": token,
+                "map_type": map_type
+            }
+        else:
+            rospy.loginfo("Found Object Image. Publishing data...")
+            body = {
+                "text": finalText,
+                "node_id": self.current_node_id,
+                "token": token,
+                "map_type": map_type
+            }
 
-            if finalText == 'QR_CODE':
-                rospy.loginfo("Found QR Code. Publishing data...")
-                # TODO: thay text và node_id bằng dữ liệu thực tế
-                body = {
-                    "text": "QR Code",
-                    "node_id": self.current_node_id,
-                    "token": token,
-                    "map_type": map_type
-                }
-            elif finalText == 'MATH_PROBLEM' or finalText == 'MATH':
-                rospy.loginfo("Found Math Problem. Solving and publishing...")
-                # TODO: Giải toán và thay text bằng kết quả thực tế
-                body = {
-                    "text": "1",
-                    "node_id": self.current_node_id,
-                    "token": token,
-                    "map_type": map_type
-                }
-            else:
-                rospy.loginfo("Found Object Image. Publishing data...")
-                body = {
-                    "text": finalText,
-                    "node_id": self.current_node_id,
-                    "token": token,
-                    "map_type": map_type
-                }
-
-            try:
-                self.publish_data(body)
-                rospy.loginfo(f"Published data for {finalText}.")
-            except Exception as e:
-                rospy.logerr(f"Failed to publish data for {finalText}: {e}")
+        try:
+            self.publish_data(body)
+            rospy.loginfo(f"Published data for {finalText}.")
+        except Exception as e:
+            rospy.logerr(f"Failed to publish data for {finalText}: {e}")
 
         rospy.loginfo("[STEP 3] Lập kế hoạch điều hướng theo bản đồ...")
         # 3. Lập kế hoạch Điều hướng
