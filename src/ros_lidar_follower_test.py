@@ -9,7 +9,7 @@ import json
 import math
 from enum import Enum
 import requests
-import socket, struct
+import socket, struct, threading
 
 
 from jetbot import Robot
@@ -36,6 +36,8 @@ class Direction(Enum):
 class JetBotController:
     def __init__(self):
         rospy.loginfo("Đang khởi tạo JetBot Event-Driven Controller...")
+        self.last_detection_time = 0  
+
         self.setup_parameters()
         self.initialize_hardware()
         self.initialize_yolo()
@@ -52,6 +54,8 @@ class JetBotController:
         self.plan_initial_route()
 
         self.latest_scan = None
+        self.debugzzz = None
+
         self.latest_image = None
         self.detector = SimpleOppositeDetector()
         rospy.Subscriber('/scan', LaserScan, self.detector.callback)
@@ -236,7 +240,7 @@ class JetBotController:
         original_height, original_width = image.shape[:2]
 
         img_resized = cv2.resize(image, self.YOLO_INPUT_SIZE)
-        img_data = np.array(img_resized, dtype=np.float32) / 255.0
+        img_data = np.array(img_resized, dtype=np.float16) / 255.0
         img_data = np.transpose(img_data, (2, 0, 1))  # HWC to CHW
         input_tensor = np.expand_dims(img_data, axis=0)  # Add batch dimension
 
@@ -340,105 +344,113 @@ class JetBotController:
                     rate.sleep()
                     continue
 
-                # --- BƯỚC 1: KIỂM TRA TÍN HIỆU ƯU TIÊN CAO (LiDAR) ---
-                # Đây là tín hiệu đáng tin cậy nhất, nếu nó kích hoạt, xử lý ngay.
-                if self.detector.process_detection():
-                    rospy.loginfo("SỰ KIỆN (LiDAR): Phát hiện giao lộ. Dừng ngay lập tức.")
-                    self.robot.stop()
-                    time.sleep(0.5) # Chờ robot dừng hẳn
+                # # --- BƯỚC 1: KIỂM TRA TÍN HIỆU ƯU TIÊN CAO (LiDAR) ---
+                # # Đây là tín hiệu đáng tin cậy nhất, nếu nó kích hoạt, xử lý ngay.
+                # if self.detector.process_detection():
+                #     rospy.loginfo("SỰ KIỆN (LiDAR): Phát hiện giao lộ. Dừng ngay lập tức.")
+                #     self.robot.stop()
+                #     time.sleep(0.5) # Chờ robot dừng hẳn
 
-                    # Cập nhật vị trí hiện tại (đã đến đích) và xử lý
-                    self.current_node_id = self.target_node_id
-                    rospy.loginfo(f"==> ĐÃ ĐẾN node {self.current_node_id}.")
+                #     # Cập nhật vị trí hiện tại (đã đến đích) và xử lý
+                #     self.current_node_id = self.target_node_id
+                #     rospy.loginfo(f"==> ĐÃ ĐẾN node {self.current_node_id}.")
 
-                    if self.current_node_id == self.navigator.end_node:
-                        rospy.loginfo("ĐÃ ĐẾN ĐÍCH CUỐI CÙNG!")
-                        self._set_state(RobotState.GOAL_REACHED)
-                    else:
-                        self._set_state(RobotState.HANDLING_EVENT)
-                        self.handle_intersection()
-                    continue # Bắt đầu vòng lặp mới với trạng thái mới
+                #     if self.current_node_id == self.navigator.end_node:
+                #         rospy.loginfo("ĐÃ ĐẾN ĐÍCH CUỐI CÙNG!")
+                #         self._set_state(RobotState.GOAL_REACHED)
+                #     else:
+                #         self._set_state(RobotState.HANDLING_EVENT)
+                #         self.handle_intersection()
+                #     continue # Bắt đầu vòng lặp mới với trạng thái mới
 
 
-                # --- BƯỚC 2: LOGIC "NHÌN XA HƠN" VỚI ROI DỰ BÁO ---
-                # Nếu LiDAR im lặng, kiểm tra xem vạch kẻ có sắp biến mất ở phía xa không.
-                lookahead_line_center = self._get_line_center(self.latest_image, self.LOOKAHEAD_ROI_Y, self.LOOKAHEAD_ROI_H)
+                # # --- BƯỚC 2: LOGIC "NHÌN XA HƠN" VỚI ROI DỰ BÁO ---
+                # # Nếu LiDAR im lặng, kiểm tra xem vạch kẻ có sắp biến mất ở phía xa không.
+                # lookahead_line_center = self._get_line_center(self.latest_image, self.LOOKAHEAD_ROI_Y, self.LOOKAHEAD_ROI_H)
 
-                if lookahead_line_center is None:
-                    rospy.logwarn("SỰ KIỆN (Dự báo): Vạch kẻ đường biến mất ở phía xa. Chuẩn bị vào giao lộ.")
-                    # Hành động phòng ngừa: chuyển sang trạng thái đi thẳng vào giao lộ.
-                    self._set_state(RobotState.APPROACHING_INTERSECTION)
-                    continue # Bắt đầu vòng lặp mới với trạng thái mới
+                # if lookahead_line_center is None:
+                #     rospy.logwarn("SỰ KIỆN (Dự báo): Vạch kẻ đường biến mất ở phía xa. Chuẩn bị vào giao lộ.")
+                #     # Hành động phòng ngừa: chuyển sang trạng thái đi thẳng vào giao lộ.
+                #     self._set_state(RobotState.APPROACHING_INTERSECTION)
+                #     continue # Bắt đầu vòng lặp mới với trạng thái mới
 
-                # --- BƯỚC 3: BÁM LINE BÌNH THƯỜNG (NẾU PHÍA TRƯỚC AN TOÀN) ---
-                # Chỉ khi cả LiDAR và ROI Dự báo đều ổn, ta mới thực hiện bám line.
-                execution_line_center = self._get_line_center(self.latest_image, self.ROI_Y, self.ROI_H)
+                # # --- BƯỚC 3: BÁM LINE BÌNH THƯỜNG (NẾU PHÍA TRƯỚC AN TOÀN) ---
+                # # Chỉ khi cả LiDAR và ROI Dự báo đều ổn, ta mới thực hiện bám line.
+                # execution_line_center = self._get_line_center(self.latest_image, self.ROI_Y, self.ROI_H)
 
-                if execution_line_center is not None:
-                    # An toàn để bám line, vì chúng ta biết phía trước không có giao lộ đột ngột.
-                    self.correct_course(execution_line_center)
-                else:
-                    # Trường hợp hiếm: ROI xa thấy line nhưng ROI gần lại không. Dừng lại cho an toàn.
-                    rospy.logwarn("Trạng thái không nhất quán: ROI xa thấy line, ROI gần không thấy. Tạm dừng an toàn.")
-                    self.robot.stop()
+                # if execution_line_center is not None:
+                #     # An toàn để bám line, vì chúng ta biết phía trước không có giao lộ đột ngột.
+                #     self.correct_course(execution_line_center)
+                # else:
+                #     # Trường hợp hiếm: ROI xa thấy line nhưng ROI gần lại không. Dừng lại cho an toàn.
+                #     rospy.logwarn("Trạng thái không nhất quán: ROI xa thấy line, ROI gần không thấy. Tạm dừng an toàn.")
+                #     self.robot.stop()
 
             # ===================================================================
             # TRẠNG THÁI 2: ĐANG TIẾN VÀO GIAO LỘ (APPROACHING_INTERSECTION)
             # ===================================================================
-            elif self.current_state == RobotState.APPROACHING_INTERSECTION:
-                # Đi thẳng một đoạn ngắn để vào trung tâm giao lộ
-                self.robot.set_motors(self.BASE_SPEED, self.BASE_SPEED)
+
+                if time.time() - self.last_detection_time >= 2.0:  # mỗi 3 giây
+                    image_info = self.latest_image
+                    detections = self.detect_with_yolo(image_info)
+                    rospy.loginfo(detections)
+                    self.last_detection_time = time.time()
+
+            # elif self.current_state == RobotState.APPROACHING_INTERSECTION:
+            #     # Đi thẳng một đoạn ngắn để vào trung tâm giao lộ
+            #     self.robot.set_motors(self.BASE_SPEED, self.BASE_SPEED)
                 
-                if rospy.get_time() - self.state_change_time > self.INTERSECTION_APPROACH_DURATION:
-                    rospy.loginfo("Đã tiến vào trung tâm giao lộ. Dừng lại để xử lý.")
-                    self.robot.stop(); time.sleep(0.5)
+            #     if rospy.get_time() - self.state_change_time > self.INTERSECTION_APPROACH_DURATION:
+            #         rospy.loginfo("Đã tiến vào trung tâm giao lộ. Dừng lại để xử lý.")
+            #         self.robot.stop(); time.sleep(0.5)
 
-                    self.current_node_id = self.target_node_id
-                    rospy.loginfo(f"==> ĐÃ ĐẾN node {self.current_node_id}.")
+            #         self.current_node_id = self.target_node_id
+            #         rospy.loginfo(f"==> ĐÃ ĐẾN node {self.current_node_id}.")
 
-                    if self.current_node_id == self.navigator.end_node:
-                        rospy.loginfo("ĐÃ ĐẾN ĐÍCH CUỐI CÙNG!")
-                        self._set_state(RobotState.GOAL_REACHED)
-                    else:
-                        self._set_state(RobotState.HANDLING_EVENT)
-                        self.handle_intersection()
+            #         if self.current_node_id == self.navigator.end_node:
+            #             rospy.loginfo("ĐÃ ĐẾN ĐÍCH CUỐI CÙNG!")
+            #             self._set_state(RobotState.GOAL_REACHED)
+            #         else:
+            #             self._set_state(RobotState.HANDLING_EVENT)
+            #             self.handle_intersection()
 
-            # ===================================================================
-            # TRẠNG THÁI 3: ĐANG RỜI KHỎI GIAO LỘ (LEAVING_INTERSECTION)
-            # ===================================================================
-            elif self.current_state == RobotState.LEAVING_INTERSECTION:
-                self.robot.set_motors(self.BASE_SPEED, self.BASE_SPEED)
-                if rospy.get_time() - self.state_change_time > self.INTERSECTION_CLEARANCE_DURATION:
-                    rospy.loginfo("Đã thoát khỏi khu vực giao lộ. Bắt đầu tìm kiếm line mới.")
-                    self._set_state(RobotState.REACQUIRING_LINE)
+            # # ===================================================================
+            # # TRẠNG THÁI 3: ĐANG RỜI KHỎI GIAO LỘ (LEAVING_INTERSECTION)
+            # # ===================================================================
+            # elif self.current_state == RobotState.LEAVING_INTERSECTION:
+            #     self.robot.set_motors(self.BASE_SPEED, self.BASE_SPEED)
+            #     if rospy.get_time() - self.state_change_time > self.INTERSECTION_CLEARANCE_DURATION:
+            #         rospy.loginfo("Đã thoát khỏi khu vực giao lộ. Bắt đầu tìm kiếm line mới.")
+            #         self._set_state(RobotState.REACQUIRING_LINE)
             
-            # ===================================================================
-            # TRẠNG THÁI 4: ĐANG TÌM LẠI LINE (REACQUIRING_LINE)
-            # ===================================================================
-            elif self.current_state == RobotState.REACQUIRING_LINE:
-                self.robot.set_motors(self.BASE_SPEED, self.BASE_SPEED)
-                line_center_x = self._get_line_center(self.latest_image, self.ROI_Y, self.ROI_H)
+            # # ===================================================================
+            # # TRẠNG THÁI 4: ĐANG TÌM LẠI LINE (REACQUIRING_LINE)
+            # # ===================================================================
+            # elif self.current_state == RobotState.REACQUIRING_LINE:
+            #     self.robot.set_motors(self.BASE_SPEED, self.BASE_SPEED)
+            #     line_center_x = self._get_line_center(self.latest_image, self.ROI_Y, self.ROI_H)
                 
-                if line_center_x is not None:
-                    rospy.loginfo("Đã tìm thấy line mới! Chuyển sang chế độ bám line.")
-                    self._set_state(RobotState.DRIVING_STRAIGHT)
-                    continue
+            #     if line_center_x is not None:
+            #         rospy.loginfo("Đã tìm thấy line mới! Chuyển sang chế độ bám line.")
+            #         self._set_state(RobotState.DRIVING_STRAIGHT)
+            #         continue
                 
-                if rospy.get_time() - self.state_change_time > self.LINE_REACQUIRE_TIMEOUT:
-                    rospy.logerr("Không thể tìm thấy line mới sau khi rời giao lộ. Dừng lại.")
-                    self._set_state(RobotState.DEAD_END)
+            #     if rospy.get_time() - self.state_change_time > self.LINE_REACQUIRE_TIMEOUT:
+            #         rospy.logerr("Không thể tìm thấy line mới sau khi rời giao lộ. Dừng lại.")
+            #         self._set_state(RobotState.DEAD_END)
 
-            # ===================================================================
-            # TRẠNG THÁI KẾT THÚC (DEAD_END, GOAL_REACHED)
-            # ===================================================================
-            elif self.current_state == RobotState.DEAD_END:
-                rospy.logwarn("Đã vào ngõ cụt hoặc gặp lỗi không thể phục hồi. Dừng hoạt động."); self.robot.stop(); break
-            elif self.current_state == RobotState.GOAL_REACHED: 
-                rospy.loginfo("ĐÃ HOÀN THÀNH NHIỆM VỤ. Dừng hoạt động."); self.robot.stop(); break
+            # # ===================================================================
+            # # TRẠNG THÁI KẾT THÚC (DEAD_END, GOAL_REACHED)
+            # # ===================================================================
+            # elif self.current_state == RobotState.DEAD_END:
+            #     rospy.logwarn("Đã vào ngõ cụt hoặc gặp lỗi không thể phục hồi. Dừng hoạt động."); self.robot.stop(); break
+            # elif self.current_state == RobotState.GOAL_REACHED: 
+            #     rospy.loginfo("ĐÃ HOÀN THÀNH NHIỆM VỤ. Dừng hoạt động."); self.robot.stop(); break
 
             if self.video_writer is not None and self.latest_image is not None:
                 # Lấy ảnh gốc, vẽ thông tin lên, rồi ghi
                 debug_frame = self.draw_debug_info(self.latest_image)
+                self.debugzzz = debug_frame
                 if debug_frame is not None:
                     self.video_writer.write(debug_frame)
 
@@ -775,9 +787,9 @@ class JetBotController:
             rospy.loginfo("Đã kết nối tới server để stream video.")
 
             while self.streaming and not rospy.is_shutdown():
-                if self.latest_image is not None:
+                if self.debugzzz is not None:
                     # Nén thành JPEG
-                    ret, jpeg = cv2.imencode(".jpg", self.latest_image)
+                    ret, jpeg = cv2.imencode(".jpg", self.debugzzz)
                     data = jpeg.tobytes()
                     # Gửi độ dài trước (4 bytes) rồi gửi ảnh
                     sock.sendall(struct.pack(">L", len(data)) + data)

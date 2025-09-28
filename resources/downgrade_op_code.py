@@ -7,23 +7,28 @@ Original file is located at
     https://colab.research.google.com/drive/1VnyhIDQe94qSSnx65XtEsnSad1wElgwe
 """
 
-!pip install ultralytics
+# !pip install ultralytics
 
 from ultralytics import YOLO
 
-model = YOLO('/content/drive/MyDrive/best.pt')
+model = YOLO(r'best.pt')
 
-model.export(format='onnx', opset=12, imgsz=640)
+print(model)
+
+import cpuinfo
+cpuinfo.get_cpu_info = lambda: {"brand_raw": "Unknown CPU"}
+
+model.export(format="onnx", opset=12, imgsz=640, verbose=False, half=True, device='0')
 
 import onnx
 
 # --- CẤU HÌNH ---
 # Đường dẫn tới file ONNX bị lỗi (file bạn vừa export từ YOLOv8)
-INPUT_ONNX_FILE = "/content/drive/MyDrive/best.onnx"
+INPUT_ONNX_FILE = "best.onnx"
 
 # Đường dẫn để lưu file ONNX đã được sửa lỗi
 # Đặt tên khác để không ghi đè lên file gốc, phòng trường hợp cần làm lại
-OUTPUT_ONNX_FILE = "/content/drive/MyDrive/best_jetsons_compatible1.onnx"
+OUTPUT_ONNX_FILE = "best_jetsons_compatible1.onnx"
 
 # Phiên bản IR_VERSION mục tiêu.
 # Jetson của bạn hỗ trợ tối đa là 8, nên chúng ta sẽ đặt là 8.
