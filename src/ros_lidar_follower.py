@@ -5,6 +5,8 @@ import cv2
 import numpy as np
 import time
 import os
+import base64
+
 import struct
 import json
 import math
@@ -12,6 +14,7 @@ from enum import Enum
 import requests
 import threading
 import socket
+import requests
 
 from jetbot import Robot
 import onnxruntime as ort
@@ -289,6 +292,7 @@ class JetBotController:
         self.INTERSECTION_COOLDOWN = 3.0  # phải qua 3s mới cho phép vào giao lộ mới
         self.MINIMUM_TRAVEL_TIME = 2.0  # Thời gian tối thiểu trước khi xử lý giao lộ (giây)
         self.start_time = None  # Thời điểm bắt đầu hành trình
+        self.INTERSECTION_COOLDOWN = 8.0  # phải qua 3s mới cho phép vào giao lộ mới
         self.WIDTH, self.HEIGHT = 300, 300
         self.BASE_SPEED = 0.16
         self.TURN_SPEED = 0.19
@@ -303,7 +307,7 @@ class JetBotController:
         self.SAFE_ZONE_PERCENT = 0.3
         self.LINE_COLOR_LOWER = np.array([0, 0, 0])
         self.LINE_COLOR_UPPER = np.array([180, 255, 95])
-        self.INTERSECTION_CLEARANCE_DURATION = 1
+        self.INTERSECTION_CLEARANCE_DURATION = 0.6
         self.INTERSECTION_APPROACH_DURATION = 0.5
         self.LINE_REACQUIRE_TIMEOUT = 3.0
         self.SCAN_PIXEL_THRESHOLD = 100
@@ -319,7 +323,11 @@ class JetBotController:
         self.MQTT_DATA_TOPIC = "jetbot/corrected_event_data"
         self.current_state = None
         self.DIRECTIONS = [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST]
-        self.current_direction_index = 1
+
+
+        self.current_direction_index = 1 #hướng start là 1 (E), phải sửa thuật toán này ?
+
+
         self.ANGLE_TO_FACE_SIGN_MAP = {d: a for d, a in zip(self.DIRECTIONS, [45, -45, -135, 135])}
         self.MAX_CORRECTION_ADJ = 0.12
         self.MAP_TYPE = "map_z"
@@ -390,36 +398,22 @@ class JetBotController:
 
     def detect_with_yolo(self, image):
         """
-        Thực hiện nhận diện đối tượng bằng YOLOv8 và hậu xử lý kết quả đúng cách.
+        Thực hiện nhận diện đối tượng bằng YOLO thông qua API http://103.69.87.125:8000/predict
+        và hậu xử lý kết quả để trả về danh sách detections.
         """
-        if self.yolo_session is None: return []
 
-        original_height, original_width = image.shape[:2]
+        # Chuyển ảnh OpenCV (numpy array) thành buffer JPEG
+        _, buffer = cv2.imencode(".jpg", image)
+        files = {"file": ("image.jpg", buffer.tobytes(), "image/jpeg")}
 
-        img_resized = cv2.resize(image, self.YOLO_INPUT_SIZE)
-        img_data = np.array(img_resized, dtype=np.float32) / 255.0
-        img_data = np.transpose(img_data, (2, 0, 1))  # HWC to CHW
-        input_tensor = np.expand_dims(img_data, axis=0)  # Add batch dimension
-
-        input_name = self.yolo_session.get_inputs()[0].name
-        outputs = self.yolo_session.run(None, {input_name: input_tensor})
-
-        # Lấy output thô, output của YOLOv8 thường có shape (1, 84, 8400) hoặc tương tự
-        # Chúng ta cần transpose nó thành (1, 8400, 84) để dễ xử lý
-        predictions = np.squeeze(outputs[0]).T
-
-        # Lọc các box có điểm tin cậy (objectness score) thấp
-        # Cột 4 trong predictions là điểm tin cậy tổng thể của box
-        scores = np.max(predictions[:, 4:], axis=1)
-        predictions = predictions[scores > self.YOLO_CONF_THRESHOLD, :]
-        scores = scores[scores > self.YOLO_CONF_THRESHOLD]
-
-        if predictions.shape[0] == 0:
-            rospy.loginfo("YOLO không phát hiện đối tượng nào vượt ngưỡng tin cậy.")
+        try:
+            response = requests.post("http://103.69.87.125:8000/predict", files=files, timeout=10)
+            response.raise_for_status()
+        except requests.RequestException as e:
+            rospy.logerr(f"Lỗi khi gọi API YOLO: {e}")
             return []
 
-        # Lấy class_id có điểm cao nhất
-        class_ids = np.argmax(predictions[:, 4:], axis=1)
+        data = response.json()
 
         # Lấy tọa độ box và chuyển đổi về ảnh gốc
         x, y, w, h = predictions[:, 0], predictions[:, 1], predictions[:, 2], predictions[:, 3]
@@ -449,14 +443,20 @@ class JetBotController:
 
         # 5. Tạo danh sách kết quả cuối cùng
         final_detections = []
-        for i in indices.flatten():
-            final_detections.append({
-                'class_name': self.YOLO_CLASS_NAMES[class_ids[i]],
-                'confidence': float(scores[i]),
-                'box': [int(coord) for coord in boxes[i]] # Chuyển tọa độ sang int
-            })
+        if "boxes" in data:
+            for box in data["boxes"]:
+                final_detections.append({
+                    "class_name": box["class_name"],
+                    "confidence": float(box["confidence"]),
+                    "box": [
+                        int(box["x1"]),
+                        int(box["y1"]),
+                        int(box["x2"] - box["x1"]),  # width
+                        int(box["y2"] - box["y1"])   # height
+                    ]
+                })
 
-        rospy.loginfo(f"YOLO đã phát hiện {len(final_detections)} đối tượng cuối cùng.")
+        rospy.loginfo(f"YOLO đã phát hiện {len(final_detections)} đối tượng cuối cùng từ API.")
         return final_detections
 
     def initialize_mqtt(self):
@@ -577,7 +577,7 @@ class JetBotController:
                         else:
                             self._set_state(RobotState.HANDLING_EVENT)
                             self.handle_intersection()
-                        continue
+                        continue # Bắt đầu vòng lặp mới với trạng thái mới
 
                 # --- BƯỚC 2: LOGIC "NHÌN XA HƠN" VỚI ROI DỰ BÁO ---
                 # Nếu LiDAR im lặng, kiểm tra xem vạch kẻ có sắp biến mất ở phía xa không.
@@ -591,6 +591,7 @@ class JetBotController:
                         # (có thể log nhẹ để debug)
                         rospy.logwarn_throttle(2.0, "Cooldown giao lộ: chưa đủ 3s, bỏ qua trigger.")
                     else:
+                        self.last_intersection_time = now
                         # Hành động phòng ngừa: chuyển sang trạng thái đi thẳng vào giao lộ.
                         self._set_state(RobotState.APPROACHING_INTERSECTION)
                         continue # Bắt đầu vòng lặp mới với trạng thái mới
@@ -773,7 +774,7 @@ class JetBotController:
         # cv2.imshow("Focus Mask", focus_mask)
         # cv2.imshow("Final Mask", final_mask)
         cv2.waitKey(1)
-
+        
         # Tìm contours trên mặt nạ cuối cùng đã được lọc
         _, contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 

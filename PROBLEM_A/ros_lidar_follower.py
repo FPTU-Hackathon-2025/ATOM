@@ -1,0 +1,990 @@
+#!/usr/bin/env python3
+
+import rospy
+import cv2
+import numpy as np
+import time
+import os
+import base64
+
+import struct
+import json
+import math
+from enum import Enum
+import requests
+import threading
+import socket
+import requests
+
+from jetbot import Robot
+import onnxruntime as ort
+from pyzbar.pyzbar import decode
+import paho.mqtt.client as mqtt
+from sensor_msgs.msg import LaserScan, Image
+from opposite_detector import SimpleOppositeDetector
+
+from map_navigator import MapNavigator
+
+class RobotState(Enum):
+    WAITING_FOR_LINE = 0
+    DRIVING_STRAIGHT = 1
+    APPROACHING_INTERSECTION = 2
+    HANDLING_EVENT = 3
+    LEAVING_INTERSECTION = 4
+    REACQUIRING_LINE = 5
+    DEAD_END = 6
+    GOAL_REACHED = 7
+
+class Direction(Enum):
+    NORTH, EAST, SOUTH, WEST = 0, 1, 2, 3
+
+class JetBotController:
+    def __init__(self):
+        rospy.loginfo("Đang khởi tạo JetBot Event-Driven Controller...")
+        self.last_intersection_time = -1e9  # cho phép lần đầu ngay lập tức
+        self.setup_parameters()
+        self.initialize_hardware()
+        self.initialize_yolo()
+        self.initialize_mqtt()
+
+        self.video_writer = None
+        self.initialize_video_writer()
+
+        self.navigator = MapNavigator(self.MAP_FILE_PATH)
+        self.current_node_id = self.navigator.start_node
+        self.target_node_id = None
+        self.planned_path = None
+        self.banned_edges = []
+        self.plan_initial_route()
+        self.debugzzz = None
+
+        self.latest_scan = None
+        self.latest_image = None
+        self.detector = SimpleOppositeDetector()
+        rospy.Subscriber('/scan', LaserScan, self.detector.callback)
+        rospy.Subscriber('/csi_cam_0/image_raw', Image, self.camera_callback)
+        rospy.loginfo("Đã đăng ký vào các topic /scan và /csi_cam_0/image_raw.")
+        self.state_change_time = rospy.get_time()
+        self._set_state(RobotState.WAITING_FOR_LINE, initial=True)
+
+        self.streaming = True
+        self.server_ip = "10.34.181.110"
+        self.server_port = 6628
+        threading.Thread(target=self.stream_socket, daemon=True).start()
+
+
+        rospy.loginfo("Khởi tạo hoàn tất. Sẵn sàng hoạt động.")
+
+    def plan_initial_route(self): 
+        """Lập kế hoạch đường đi ban đầu từ điểm xuất phát đến đích."""
+        rospy.loginfo(f"Đang lập kế hoạch từ node {self.navigator.start_node} đến {self.navigator.end_node}...")
+        self.planned_path = self.navigator.find_path(
+            self.navigator.start_node, 
+            self.navigator.end_node,
+            self.banned_edges
+        )
+        if self.planned_path and len(self.planned_path) > 1:
+            self.target_node_id = self.planned_path[1]
+            rospy.loginfo(f"Đã tìm thấy đường đi: {self.planned_path}. Đích đến đầu tiên: {self.target_node_id}")
+        else:
+            rospy.logerr("Không tìm thấy đường đi hoặc đường đi quá ngắn!")
+            self._set_state(RobotState.DEAD_END)
+
+    def initialize_video_writer(self):
+        """Khởi tạo đối tượng VideoWriter."""
+        try:
+            # Kích thước video sẽ giống kích thước ảnh robot xử lý
+            frame_size = (self.WIDTH, self.HEIGHT)
+            self.video_writer = cv2.VideoWriter(self.VIDEO_OUTPUT_FILENAME, 
+                                                self.VIDEO_FOURCC, 
+                                                self.VIDEO_FPS, 
+                                                frame_size)
+            if self.video_writer.isOpened():
+                rospy.loginfo(f"Bắt đầu ghi video vào file '{self.VIDEO_OUTPUT_FILENAME}'")
+            else:
+                rospy.logerr("Không thể mở file video để ghi.")
+                self.video_writer = None
+        except Exception as e:
+            rospy.logerr(f"Lỗi khi khởi tạo VideoWriter: {e}")
+            self.video_writer = None
+
+    def _compute_masks(self, image, roi_y, roi_h):
+        roi = image[roi_y: roi_y + roi_h, :]
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        H, S, V = cv2.split(hsv)
+
+        # --- 0) Ngưỡng động theo percentile để chịu đựng thay đổi ánh sáng ---
+        v_dark = int(np.clip(np.percentile(V, 25), 60, 130))   # “tối” tương đối
+        s_lo   = 90                                            # đen thường có bão hòa thấp-vừa
+
+        # --- 1) Mask tối (HSV) ---
+        hsv_dark = cv2.inRange(hsv,
+                            np.array([0,   0,     0], dtype=np.uint8),
+                            np.array([179, s_lo, v_dark], dtype=np.uint8))
+
+        # --- 2) Adaptive threshold (grayscale, đảo) để giữ đường trong nền sáng ---
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        # làm mượt nhẹ để bớt noise muối tiêu
+        gray_blur = cv2.medianBlur(gray, 3)
+        # ngưỡng thích nghi (ô 15x15; C=5 điều chỉnh lệch)
+        bin_inv = cv2.adaptiveThreshold(
+            gray_blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV, 15, 5
+        )
+
+        # --- 3) Khử đốm loé (specular): S rất thấp & V rất cao -> gần trắng bóng ---
+        specular = cv2.inRange(hsv,
+                            np.array([0,   0,   200], dtype=np.uint8),
+                            np.array([179, 35, 255], dtype=np.uint8))
+        specular = cv2.medianBlur(specular, 3)
+
+        # --- 4) Hợp nhất & khử loé ---
+        color_mask = hsv_dark
+        focus_mask = np.zeros_like(color_mask)
+        h, w = focus_mask.shape
+        center_w = int(w * self.ROI_CENTER_WIDTH_PERCENT)
+        sx = (w - center_w) // 2
+        ex = sx + center_w
+        cv2.rectangle(focus_mask, (sx, 0), (ex, h), 255, -1)
+
+        # final = (đen theo HSV  OR  đen theo adaptive)  AND  focus  AND  NOT specular
+        final_mask = cv2.bitwise_or(color_mask, bin_inv)
+        final_mask = cv2.bitwise_and(final_mask, focus_mask)
+        final_mask = cv2.bitwise_and(final_mask, cv2.bitwise_not(specular))
+
+        # --- 5) Hình thái học để liền nét & bớt răng cưa ---
+        k = np.ones((3,3), np.uint8)
+        final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_CLOSE, k, iterations=1)
+        final_mask = cv2.medianBlur(final_mask, 3)
+
+        return roi, color_mask, focus_mask, final_mask
+
+    def _strip4(self, roi_bgr, color_mask, focus_mask, final_mask, label,
+                tile_h=90, tile_w=120):
+        """Ghép 4 ô: ROI | color | focus | final (đã resize), kèm nhãn."""
+        def to_bgr(img):
+            if len(img.shape) == 2:   # mask GRAY -> BGR
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+            return cv2.resize(img, (tile_w, tile_h), interpolation=cv2.INTER_AREA)
+
+        t_roi   = to_bgr(roi_bgr)
+        t_color = to_bgr(color_mask)
+        t_focus = to_bgr(focus_mask)
+        t_final = to_bgr(final_mask)
+
+        strip = cv2.hconcat([t_roi, t_color, t_focus, t_final])
+
+        # Nhãn tổng
+        cv2.putText(strip, label, (6, tile_h - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1, cv2.LINE_AA)
+        # Nhãn từng ô
+        off = 5; step = tile_w
+        cv2.putText(strip, "roi",   (off + step*0, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (220,220,220), 1, cv2.LINE_AA)
+        cv2.putText(strip, "color", (off + step*1, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (220,220,220), 1, cv2.LINE_AA)
+        cv2.putText(strip, "focus", (off + step*2, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (220,220,220), 1, cv2.LINE_AA)
+        cv2.putText(strip, "final", (off + step*3, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (220,220,220), 1, cv2.LINE_AA)
+        return strip
+
+
+    def _compute_tile_size(self, cols=4, margin=6, max_tile_h=90):
+        """
+        Tính kích thước tile để strip (cols ô) luôn vừa khung WIDTH.
+        Trả về (tile_h, tile_w, margin).
+        """
+        avail_w = self.WIDTH - 2 * margin
+        # đảm bảo >= 40px/ô để vẫn nhìn được
+        tile_w = max(40, avail_w // cols)
+        # tile_h giữ tỉ lệ tùy ý; ở đây lấy ~0.75 * tile_w nhưng không vượt max_tile_h
+        tile_h = min(max_tile_h, int(tile_w * 0.75))
+        return tile_h, tile_w, margin
+
+
+    def _paste_safe(self, dst, tile, x, y):
+        """Dán tile vào dst tại (x,y), tự cắt nếu vượt khung để tránh broadcast error."""
+        H, W = dst.shape[:2]
+        h, w = tile.shape[:2]
+
+        # Cắt phía trái/trên nếu start < 0
+        if x < 0:
+            tile = tile[:, -x:]
+            w = tile.shape[1]
+            x = 0
+        if y < 0:
+            tile = tile[-y:, :]
+            h = tile.shape[0]
+            y = 0
+
+        # Nằm ngoài khung
+        if x >= W or y >= H:
+            return
+
+        w_fit = min(w, W - x)
+        h_fit = min(h, H - y)
+        if w_fit <= 0 or h_fit <= 0:
+            return
+
+        dst[y:y+h_fit, x:x+w_fit] = tile[0:h_fit, 0:w_fit]
+
+    def draw_debug_info(self, image):
+        """Vẽ thông tin gỡ lỗi + 2 strip (mỗi strip 4 ô cạnh nhau) vào debug_frame."""
+        if image is None:
+            return None
+
+        debug_frame = image.copy()
+
+        # Vẽ khung 2 ROI
+        cv2.rectangle(debug_frame, (0, self.ROI_Y),
+                    (self.WIDTH-1, self.ROI_Y + self.ROI_H), (0, 255, 0), 1)
+        cv2.rectangle(debug_frame, (0, self.LOOKAHEAD_ROI_Y),
+                    (self.WIDTH-1, self.LOOKAHEAD_ROI_Y + self.LOOKAHEAD_ROI_H), (0, 255, 255), 1)
+
+        # State text
+        st = f"State: {self.current_state.name if self.current_state else 'N/A'}"
+        cv2.putText(debug_frame, st, (10, 20), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5, (255, 255, 255), 1, cv2.LINE_AA)
+
+        # Vẽ line center ở ROI chính (nếu đang bám line)
+        if self.current_state == RobotState.DRIVING_STRAIGHT:
+            lc = self._get_line_center(image, self.ROI_Y, self.ROI_H)
+            if lc is not None:
+                cv2.line(debug_frame, (lc, self.ROI_Y),
+                        (lc, self.ROI_Y + self.ROI_H), (0, 0, 255), 2)
+
+        # === Tạo 2 strip (mỗi strip gồm 4 ô cạnh nhau) ===
+        try:
+            roi1, c1, f1, g1 = self._compute_masks(image, self.ROI_Y, self.ROI_H)
+            roi2, c2, f2, g2 = self._compute_masks(image, self.LOOKAHEAD_ROI_Y, self.LOOKAHEAD_ROI_H)
+
+            # TÍNH KÍCH THƯỚC TILE SAO CHO 4 Ô VỪA KHUNG
+            tile_h, tile_w, pad = self._compute_tile_size(cols=4, margin=6, max_tile_h=80)
+
+            strip_main = self._strip4(roi1, c1, f1, g1, "ROI main", tile_h, tile_w)
+            strip_look = self._strip4(roi2, c2, f2, g2, "ROI lookahead", tile_h, tile_w)
+
+            # Dán 2 strip ở góc phải, 2 hàng (có kiểm tra biên)
+            x = self.WIDTH - max(strip_main.shape[1], strip_look.shape[1]) - pad
+            x = max(0, x)  # nếu âm, kéo về 0
+            y1 = pad
+            y2 = y1 + strip_main.shape[0] + pad
+
+            self._paste_safe(debug_frame, strip_main, x, y1)
+            self._paste_safe(debug_frame, strip_look, x, y2)
+
+            # (tuỳ chọn) lưu mask cuối để debug
+            self._last_final_mask_main = g1
+            self._last_final_mask_lookahead = g2
+
+        except Exception as e:
+            # ĐÚNG: dùng f-string (hoặc "mask err: %s", str(e))
+            rospy.logerr(f"mask err: {e}")
+            cv2.putText(debug_frame, "mask err", (10, 40),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1, cv2.LINE_AA)
+
+        return debug_frame
+
+
+    def setup_parameters(self):
+        self.INTERSECTION_COOLDOWN = 8.0  # phải qua 3s mới cho phép vào giao lộ mới
+        self.WIDTH, self.HEIGHT = 300, 300
+        self.BASE_SPEED = 0.16
+        self.TURN_SPEED = 0.19
+        self.TURN_DURATION_90_DEG = 0.8
+        self.ROI_Y = int(self.HEIGHT * 0.85)
+        self.ROI_H = int(self.HEIGHT * 0.15)
+        self.ROI_CENTER_WIDTH_PERCENT = 0.5
+        self.LOOKAHEAD_ROI_Y = int(self.HEIGHT * 0.60) # Vị trí Y cao hơn
+        self.LOOKAHEAD_ROI_H = int(self.HEIGHT * 0.15) # Chiều cao tương tự
+
+        self.CORRECTION_GAIN = 0.5
+        self.SAFE_ZONE_PERCENT = 0.3
+        self.LINE_COLOR_LOWER = np.array([0, 0, 0])
+        self.LINE_COLOR_UPPER = np.array([180, 255, 95])
+        self.INTERSECTION_CLEARANCE_DURATION = 0.6
+        self.INTERSECTION_APPROACH_DURATION = 0.5
+        self.LINE_REACQUIRE_TIMEOUT = 3.0
+        self.SCAN_PIXEL_THRESHOLD = 100
+        self.YOLO_MODEL_PATH = "models/best.onnx"
+        self.YOLO_CONF_THRESHOLD = 0.6
+        self.YOLO_INPUT_SIZE = (640, 640)
+        self.YOLO_CLASS_NAMES = ['N', 'E', 'W', 'S', 'NN', 'NE', 'NW', 'NS', 'math']
+        self.PRESCRIPTIVE_SIGNS = {'N', 'E', 'W', 'S'}
+        self.PROHIBITIVE_SIGNS = {'NN', 'NE', 'NW', 'NS'}
+        self.DATA_ITEMS = {'qr_code', 'math_problem'}
+        self.MQTT_BROKER = "localhost" 
+        self.MQTT_PORT = 1883
+        self.MQTT_DATA_TOPIC = "jetbot/corrected_event_data"
+        self.current_state = None
+        self.DIRECTIONS = [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST]
+
+
+        self.current_direction_index = 1 #hướng start là 1 (E), phải sửa thuật toán này ?
+
+
+        self.ANGLE_TO_FACE_SIGN_MAP = {d: a for d, a in zip(self.DIRECTIONS, [45, -45, -135, 135])}
+        self.MAX_CORRECTION_ADJ = 0.12
+        self.MAP_FILE_PATH = "map.json"
+        self.LABEL_TO_DIRECTION_ENUM = {'N': Direction.NORTH, 'E': Direction.EAST, 'S': Direction.SOUTH, 'W': Direction.WEST}
+        self.VIDEO_OUTPUT_FILENAME = 'jetbot_run.mp4'
+        self.VIDEO_FPS = 20  # Nên khớp với rospy.Rate của bạn
+        # Codec 'MJPG' rất phổ biến và tương thích tốt
+        self.VIDEO_FOURCC = cv2.VideoWriter_fourcc(*'MJPG')
+
+    def initialize_hardware(self):
+        try:
+            self.robot = Robot()
+            rospy.loginfo("Phần cứng JetBot (động cơ) đã được khởi tạo.")
+        except Exception as e:
+            rospy.logwarn(f"Không tìm thấy phần cứng JetBot, sử dụng Mock object. Lỗi: {e}")
+            from unittest.mock import Mock
+            self.robot = Mock()
+
+    def initialize_yolo(self):
+        """Tải mô hình YOLO vào ONNX Runtime."""
+        try:
+            self.yolo_session = ort.InferenceSession(self.YOLO_MODEL_PATH, providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+            rospy.loginfo("Tải mô hình YOLO thành công.")
+        except Exception as e:
+            rospy.logerr(f"Không thể tải mô hình YOLO từ '{self.YOLO_MODEL_PATH}'. Lỗi: {e}")
+            self.yolo_session = None
+
+    def numpy_nms(self, boxes, scores, iou_threshold):
+        """
+        Thực hiện Non-Maximum Suppression (NMS) bằng NumPy.
+        :param boxes: list các bounding box, mỗi box là [x1, y1, x2, y2]
+        :param scores: list các điểm tin cậy tương ứng
+        :param iou_threshold: ngưỡng IoU để loại bỏ các box trùng lặp
+        :return: list các chỉ số (indices) của các box được giữ lại
+        """
+        # Chuyển đổi sang NumPy array để tính toán vector hóa
+        x1 = np.array([b[0] for b in boxes])
+        y1 = np.array([b[1] for b in boxes])
+        x2 = np.array([b[2] for b in boxes])
+        y2 = np.array([b[3] for b in boxes])
+
+        areas = (x2 - x1 + 1) * (y2 - y1 + 1)
+        # Sắp xếp các box theo điểm tin cậy giảm dần
+        order = scores.argsort()[::-1]
+
+        keep = []
+        while order.size > 0:
+            i = order[0]
+            keep.append(i)
+            
+            # Tính toán IoU (Intersection over Union)
+            xx1 = np.maximum(x1[i], x1[order[1:]])
+            yy1 = np.maximum(y1[i], y1[order[1:]])
+            xx2 = np.minimum(x2[i], x2[order[1:]])
+            yy2 = np.minimum(y2[i], y2[order[1:]])
+
+            w = np.maximum(0.0, xx2 - xx1 + 1)
+            h = np.maximum(0.0, yy2 - yy1 + 1)
+            intersection = w * h
+            
+            iou = intersection / (areas[i] + areas[order[1:]] - intersection)
+
+            # Giữ lại các box có IoU nhỏ hơn ngưỡng
+            inds = np.where(iou <= iou_threshold)[0]
+            order = order[inds + 1]
+
+        return np.array(keep)
+
+    def detect_with_yolo(self, image):
+        """
+        Thực hiện nhận diện đối tượng bằng YOLO thông qua API http://103.69.87.125:8000/predict
+        và hậu xử lý kết quả để trả về danh sách detections.
+        """
+
+        # Chuyển ảnh OpenCV (numpy array) thành buffer JPEG
+        _, buffer = cv2.imencode(".jpg", image)
+        files = {"file": ("image.jpg", buffer.tobytes(), "image/jpeg")}
+
+        try:
+            response = requests.post("http://103.69.87.125:8000/predict", files=files, timeout=10)
+            response.raise_for_status()
+        except requests.RequestException as e:
+            rospy.logerr(f"Lỗi khi gọi API YOLO: {e}")
+            return []
+
+        data = response.json()
+
+        final_detections = []
+        if "boxes" in data:
+            for box in data["boxes"]:
+                final_detections.append({
+                    "class_name": box["class_name"],
+                    "confidence": float(box["confidence"]),
+                    "box": [
+                        int(box["x1"]),
+                        int(box["y1"]),
+                        int(box["x2"] - box["x1"]),  # width
+                        int(box["y2"] - box["y1"])   # height
+                    ]
+                })
+
+        rospy.loginfo(f"YOLO đã phát hiện {len(final_detections)} đối tượng cuối cùng từ API.")
+        return final_detections
+
+    def initialize_mqtt(self):
+        self.mqtt_client = mqtt.Client()
+        def on_connect(client, userdata, flags, rc): rospy.loginfo(f"Kết nối MQTT: {'Thành công' if rc == 0 else 'Thất bại'}")
+        self.mqtt_client.on_connect = on_connect
+        try:
+            self.mqtt_client.connect(self.MQTT_BROKER, self.MQTT_PORT, 60)
+            self.mqtt_client.loop_start()
+        except Exception as e: rospy.logerr(f"Không thể kết nối MQTT: {e}")
+    
+    def _set_state(self, new_state, initial=False):
+        if self.current_state != new_state:
+            if not initial: rospy.loginfo(f"Chuyển trạng thái: {self.current_state.name} -> {new_state.name}")
+            self.current_state = new_state
+            self.state_change_time = rospy.get_time()
+
+    def camera_callback(self, image_msg):
+        try:
+            if image_msg.encoding.endswith('compressed'):
+                np_arr = np.frombuffer(image_msg.data, np.uint8)
+                cv_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            else:
+                cv_image = np.frombuffer(image_msg.data, dtype=np.uint8).reshape(image_msg.height, image_msg.width, -1)
+            if 'rgb' in image_msg.encoding: cv_image = cv2.cvtColor(cv_image, cv2.COLOR_RGB2BGR)
+            self.latest_image = cv2.resize(cv_image, (self.WIDTH, self.HEIGHT))
+        except Exception as e: rospy.logerr(f"Lỗi chuyển đổi ảnh: {e}")
+
+    def run(self):
+        rospy.loginfo("Bắt đầu vòng lặp. Đợi 3 giây...") 
+        time.sleep(3) 
+        rospy.loginfo("Hành trình bắt đầu!")
+        self.detector.start_scanning()
+        rate = rospy.Rate(20)
+        while not rospy.is_shutdown():
+            # ===================================================================
+            # TRẠNG THÁI 0: ĐANG CHỜ TÌM THẤY LINE (WAITING_FOR_LINE)
+            # ===================================================================
+            if self.current_state == RobotState.WAITING_FOR_LINE:
+                rospy.loginfo_throttle(5, "Đang ở trạng thái chờ... Tìm kiếm vạch kẻ đường để bắt đầu.")
+                
+                # Giữ robot đứng yên
+                self.robot.stop()
+
+                # Kiểm tra xem đã có ảnh chưa
+                if self.latest_image is None:
+                    rate.sleep()
+                    continue
+                
+                # Kiểm tra xem line có xuất hiện trong cả hai ROI không để đảm bảo ổn định
+                lookahead_line = self._get_line_center(self.latest_image, self.LOOKAHEAD_ROI_Y, self.LOOKAHEAD_ROI_H)
+                execution_line = self._get_line_center(self.latest_image, self.ROI_Y, self.ROI_H)
+
+                if lookahead_line is not None and execution_line is not None:
+                    rospy.loginfo("Đã tìm thấy vạch kẻ đường! Bắt đầu hành trình.")
+                    self._set_state(RobotState.DRIVING_STRAIGHT)
+                    # Không cần continue, để vòng lặp tiếp theo tự nhiên chuyển sang DRIVING_STRAIGHT
+                
+                # (Tùy chọn: Thêm timeout nếu muốn)
+                # if rospy.get_time() - self.state_change_time > 30: # Ví dụ timeout 30 giây
+                #     rospy.logerr("Timeout! Không tìm thấy line để bắt đầu.")
+                #     self._set_state(RobotState.DEAD_END)
+            # ===================================================================
+            # TRẠNG THÁI 1: ĐANG BÁM LINE (DRIVING_STRAIGHT)
+            # ===================================================================
+            if self.current_state == RobotState.DRIVING_STRAIGHT:
+                if self.latest_image is None:
+                    rospy.logwarn_throttle(5, "Đang chờ dữ liệu hình ảnh từ topic camera...")
+                    self.robot.stop()
+                    rate.sleep()
+                    continue
+
+                # --- BƯỚC 1: KIỂM TRA TÍN HIỆU ƯU TIÊN CAO (LiDAR) ---
+                # Đây là tín hiệu đáng tin cậy nhất, nếu nó kích hoạt, xử lý ngay.
+                if self.detector.process_detection():
+                    now = rospy.get_time()
+                    if (now - self.last_intersection_time) < self.INTERSECTION_COOLDOWN:
+                        # Chưa đủ 3s -> bỏ qua trigger, tiếp tục bám line
+                        # (có thể log nhẹ để debug)
+                        rospy.logwarn_throttle(2.0, "Cooldown giao lộ: chưa đủ 5s, bỏ qua trigger.")
+                    else:
+                        self.last_intersection_time = now
+                        rospy.loginfo("SỰ KIỆN (LiDAR): Phát hiện giao lộ. Dừng ngay lập tức.")
+                        self.robot.stop()
+                        time.sleep(0.5) # Chờ robot dừng hẳn
+
+                        # Cập nhật vị trí hiện tại (đã đến đích) và xử lý
+                        self.current_node_id = self.target_node_id
+                        rospy.loginfo(f"==> ĐÃ ĐẾN node {self.current_node_id}.")
+
+                        if self.current_node_id == self.navigator.end_node:
+                            rospy.loginfo("ĐÃ ĐẾN ĐÍCH CUỐI CÙNG!")
+                            self._set_state(RobotState.GOAL_REACHED)
+                        else:
+                            self._set_state(RobotState.HANDLING_EVENT)
+                            self.handle_intersection()
+                        continue # Bắt đầu vòng lặp mới với trạng thái mới
+
+                # --- BƯỚC 2: LOGIC "NHÌN XA HƠN" VỚI ROI DỰ BÁO ---
+                # Nếu LiDAR im lặng, kiểm tra xem vạch kẻ có sắp biến mất ở phía xa không.
+                lookahead_line_center = self._get_line_center(self.latest_image, self.LOOKAHEAD_ROI_Y, self.LOOKAHEAD_ROI_H)
+
+                if lookahead_line_center is None:
+                    rospy.logwarn("SỰ KIỆN (Dự báo): Vạch kẻ đường biến mất ở phía xa. Chuẩn bị vào giao lộ.")
+                    now = rospy.get_time()
+                    if (now - self.last_intersection_time) < self.INTERSECTION_COOLDOWN:
+                        # Chưa đủ 3s -> bỏ qua trigger, tiếp tục bám line
+                        # (có thể log nhẹ để debug)
+                        rospy.logwarn_throttle(2.0, "Cooldown giao lộ: chưa đủ 3s, bỏ qua trigger.")
+                    else:
+                        self.last_intersection_time = now
+                        # Hành động phòng ngừa: chuyển sang trạng thái đi thẳng vào giao lộ.
+                        self._set_state(RobotState.APPROACHING_INTERSECTION)
+                        continue # Bắt đầu vòng lặp mới với trạng thái mới
+
+                # --- BƯỚC 3: BÁM LINE BÌNH THƯỜNG (NẾU PHÍA TRƯỚC AN TOÀN) ---
+                # Chỉ khi cả LiDAR và ROI Dự báo đều ổn, ta mới thực hiện bám line.
+                execution_line_center = self._get_line_center(self.latest_image, self.ROI_Y, self.ROI_H)
+
+                if execution_line_center is not None:
+                    # An toàn để bám line, vì chúng ta biết phía trước không có giao lộ đột ngột.
+                    self.correct_course(execution_line_center)
+                else:
+                    # Trường hợp hiếm: ROI xa thấy line nhưng ROI gần lại không. Dừng lại cho an toàn.
+                    rospy.logwarn("Trạng thái không nhất quán: ROI xa thấy line, ROI gần không thấy. Tạm dừng an toàn.")
+                    self.robot.stop()
+
+            # ===================================================================
+            # TRẠNG THÁI 2: ĐANG TIẾN VÀO GIAO LỘ (APPROACHING_INTERSECTION)
+            # ===================================================================
+            elif self.current_state == RobotState.APPROACHING_INTERSECTION:
+                # Đi thẳng một đoạn ngắn để vào trung tâm giao lộ
+                self.robot.set_motors(self.BASE_SPEED, self.BASE_SPEED)
+                
+                if rospy.get_time() - self.state_change_time > self.INTERSECTION_APPROACH_DURATION:
+                    rospy.loginfo("Đã tiến vào trung tâm giao lộ. Dừng lại để xử lý.")
+                    self.robot.stop() 
+                    time.sleep(0.5)
+
+                    self.current_node_id = self.target_node_id
+                    rospy.loginfo(f"==> ĐÃ ĐẾN node {self.current_node_id}.")
+
+                    if self.current_node_id == self.navigator.end_node:
+                        rospy.loginfo("ĐÃ ĐẾN ĐÍCH CUỐI CÙNG!")
+                        self._set_state(RobotState.GOAL_REACHED)
+                    else:
+                        self._set_state(RobotState.HANDLING_EVENT)
+                        self.handle_intersection()
+
+            # ===================================================================
+            # TRẠNG THÁI 3: ĐANG RỜI KHỎI GIAO LỘ (LEAVING_INTERSECTION)
+            # ===================================================================
+            elif self.current_state == RobotState.LEAVING_INTERSECTION:
+                self.robot.set_motors(self.BASE_SPEED, self.BASE_SPEED)
+                if rospy.get_time() - self.state_change_time > self.INTERSECTION_CLEARANCE_DURATION:
+                    rospy.loginfo("Đã thoát khỏi khu vực giao lộ. Bắt đầu tìm kiếm line mới.")
+                    self._set_state(RobotState.REACQUIRING_LINE)
+            
+            # ===================================================================
+            # TRẠNG THÁI 4: ĐANG TÌM LẠI LINE (REACQUIRING_LINE)
+            # ===================================================================
+            elif self.current_state == RobotState.REACQUIRING_LINE:
+                self.robot.set_motors(self.BASE_SPEED, self.BASE_SPEED)
+                line_center_x = self._get_line_center(self.latest_image, self.ROI_Y, self.ROI_H)
+                
+                if line_center_x is not None:
+                    rospy.loginfo("Đã tìm thấy line mới! Chuyển sang chế độ bám line.")
+                    self._set_state(RobotState.DRIVING_STRAIGHT)
+                    continue
+                
+                if rospy.get_time() - self.state_change_time > self.LINE_REACQUIRE_TIMEOUT:
+                    rospy.logerr("Không thể tìm thấy line mới sau khi rời giao lộ. Dừng lại.")
+                    self._set_state(RobotState.DEAD_END)
+
+            # ===================================================================
+            # TRẠNG THÁI KẾT THÚC (DEAD_END, GOAL_REACHED)
+            # ===================================================================
+            elif self.current_state == RobotState.DEAD_END:
+                rospy.logwarn("Đã vào ngõ cụt hoặc gặp lỗi không thể phục hồi. Dừng hoạt động.") 
+                self.robot.stop() 
+                break
+            elif self.current_state == RobotState.GOAL_REACHED: 
+                rospy.loginfo("ĐÃ HOÀN THÀNH NHIỆM VỤ. Dừng hoạt động.") 
+                self.robot.stop()
+                break
+
+            if self.video_writer is not None and self.latest_image is not None:
+                # Lấy ảnh gốc, vẽ thông tin lên, rồi ghi
+                debug_frame = self.draw_debug_info(self.latest_image)
+                self.debugzzz = debug_frame
+                if debug_frame is not None:
+                    self.video_writer.write(debug_frame)
+
+
+            rate.sleep()
+        self.cleanup()
+
+    def _record_frame(self):
+        """Hàm trợ giúp để vẽ thông tin và ghi một khung hình vào video."""
+        if self.video_writer is not None and self.latest_image is not None:
+            debug_frame = self.draw_debug_info(self.latest_image)
+            if debug_frame is not None:
+                self.video_writer.write(debug_frame)
+
+    def cleanup(self):
+        rospy.loginfo("Dừng robot và giải phóng tài nguyên...") 
+        if hasattr(self, 'robot') and self.robot is not None:
+            self.robot.stop()
+
+        if hasattr(self, 'video_writer') and self.video_writer is not None:
+            self.video_writer.release()
+            rospy.loginfo("Đã lưu và đóng file video.")
+        
+        if hasattr(self, 'detector') and self.detector is not None:
+            self.detector.stop_scanning()
+            
+        if hasattr(self, 'mqtt_client') and self.mqtt_client is not None:
+            self.mqtt_client.loop_stop()
+            self.mqtt_client.disconnect()
+            
+        rospy.loginfo("Đã giải phóng tài nguyên. Chương trình kết thúc.")
+
+    def map_absolute_to_relative(self, target_direction_label, current_robot_direction):
+        """
+        Chuyển đổi hướng tuyệt đối ('N', 'E', 'S', 'W') thành hành động tương đối ('straight', 'left', 'right').
+        Ví dụ: robot đang hướng BẮC (NORTH), mục tiêu là đi hướng ĐÔNG (EAST) -> hành động là 'right'.
+        """
+        target_dir = self.LABEL_TO_DIRECTION_ENUM.get(target_direction_label)
+        if target_dir is None: return None
+
+        current_idx = current_robot_direction.value
+        target_idx = target_dir.value
+        
+        diff = (target_idx - current_idx + 4) % 4 
+        
+        if diff == 0:
+            return 'straight'
+        elif diff == 1:
+            return 'right'
+        elif diff == 3: 
+            return 'left'
+        else: 
+            return 'turn_around'
+        
+    def map_relative_to_absolute(self, relative_action, current_robot_direction):
+        """
+        Chuyển đổi hành động tương đối ('straight', 'left', 'right') thành hướng tuyệt đối ('N', 'E', 'S', 'W').
+        """
+        current_idx = current_robot_direction.value
+        if relative_action == 'straight':
+            target_idx = current_idx
+        elif relative_action == 'right':
+            target_idx = (current_idx + 1) % 4
+        elif relative_action == 'left':
+            target_idx = (current_idx - 1 + 4) % 4
+        else:
+            return None
+        
+        for label, direction in self.LABEL_TO_DIRECTION_ENUM.items():
+            if direction.value == target_idx:
+                return label
+        return None
+    
+    def _get_line_center(self, image, roi_y, roi_h):
+        """Kiểm tra sự tồn tại và vị trí của vạch kẻ trong một ROI cụ thể."""
+        if image is None: return None
+        roi = image[roi_y : roi_y + roi_h, :]
+        
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        
+        # Bước 1: Tạo mặt nạ màu sắc như cũ
+        color_mask = cv2.inRange(hsv, self.LINE_COLOR_LOWER, self.LINE_COLOR_UPPER)
+        
+        # === BƯỚC 2: TẠO MẶT NẠ TẬP TRUNG (FOCUS MASK) ===
+        focus_mask = np.zeros_like(color_mask)
+        roi_height, roi_width = focus_mask.shape
+        
+        center_width = int(roi_width * self.ROI_CENTER_WIDTH_PERCENT)
+        start_x = (roi_width - center_width) // 2
+        end_x = start_x + center_width
+        
+        # Vẽ một hình chữ nhật trắng ở giữa
+        cv2.rectangle(focus_mask, (start_x, 0), (end_x, roi_height), 255, -1)
+        
+        # === BƯỚC 3: KẾT HỢP HAI MẶT NẠ ===
+        # Chỉ giữ lại những pixel trắng nào xuất hiện ở cả hai mặt nạ
+        final_mask = cv2.bitwise_and(color_mask, focus_mask)
+
+        # (Tùy chọn) Hiển thị mask để debug
+        # cv2.imshow("Color Mask", color_mask)
+        # cv2.imshow("Focus Mask", focus_mask)
+        # cv2.imshow("Final Mask", final_mask)
+        cv2.waitKey(1)
+        
+        # Tìm contours trên mặt nạ cuối cùng đã được lọc
+        _, contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        if not contours:
+            return None
+            
+        c = max(contours, key=cv2.contourArea)
+        
+        if cv2.contourArea(c) < self.SCAN_PIXEL_THRESHOLD:
+            return None
+
+        M = cv2.moments(c)
+        if M["m00"] > 0:
+            # Quan trọng: Trọng tâm bây giờ được tính toán chỉ dựa trên vạch kẻ trong khu vực trung tâm
+            return int(M["m10"] / M["m00"])
+        return None
+    
+    def correct_course(self, line_center_x):
+        """
+        Hàm bám line an toàn với cơ chế giới hạn lực bẻ lái.
+        """
+        error = line_center_x - (self.WIDTH / 2)
+        
+        # Vẫn đi thẳng nếu sai số rất nhỏ
+        if abs(error) < (self.WIDTH / 2) * self.SAFE_ZONE_PERCENT:
+            self.robot.set_motors(self.BASE_SPEED, self.BASE_SPEED)
+            return
+
+        # Tính toán lực điều chỉnh
+        adj = (error / (self.WIDTH / 2)) * self.CORRECTION_GAIN
+
+        # Ngăn chặn hành vi bẻ lái quá gắt một cách tuyệt đối
+        adj = np.clip(adj, -self.MAX_CORRECTION_ADJ, self.MAX_CORRECTION_ADJ)
+        
+        # Áp dụng lực điều chỉnh đã được giới hạn
+        left_motor = self.BASE_SPEED + adj
+        right_motor = self.BASE_SPEED - adj
+        self.robot.set_motors(left_motor, right_motor)
+        
+    def handle_intersection(self):
+        rospy.loginfo("\n[GIAO LỘ] Dừng lại và xử lý...")
+        self.robot.stop() 
+        time.sleep(0.5)
+
+        current_direction = self.DIRECTIONS[self.current_direction_index]
+        angle_to_sign = self.ANGLE_TO_FACE_SIGN_MAP.get(current_direction, 0)
+        self.turn_robot(angle_to_sign, False)
+        image_info = self.latest_image
+        detections = self.detect_with_yolo(image_info)
+        self.turn_robot(-angle_to_sign, False)
+        
+        prescriptive_cmds = {det['class_name'] for det in detections if det['class_name'] in self.PRESCRIPTIVE_SIGNS}
+        prohibitive_cmds = {det['class_name'] for det in detections if det['class_name'] in self.PROHIBITIVE_SIGNS}
+        data_items = [det for det in detections if det['class_name'] in self.DATA_ITEMS]
+
+        # 2. Xử lý các mục dữ liệu (QR, Toán) và Publish
+        rospy.loginfo("[STEP 2] Processing data items...")
+        for item in data_items:
+            if item['class_name'] == 'qr_code':
+                # Code đọc QR thật
+                # box = item['box']; qr_image = self.latest_image[box[1]:box[3], box[0]:box[2]]
+                # decoded = decode(qr_image)
+                # if decoded: qr_data = decoded[0].data.decode('utf-8'); self.publish_data(...)
+                rospy.loginfo("Found QR Code. Publishing data...")
+                # self.publish_data({'type': 'QR_CODE', 'value': 'simulated_data_123'})
+
+                # response = requests.post(url, json=data)
+
+                # print(response.status_code)
+
+            elif item['class_name'] == 'math_problem':
+                rospy.loginfo("Found Math Problem. Solving and publishing...")
+                self.publish_data({'type': 'MATH_PROBLEM', 'value': '2+2=4'})
+        
+        
+        rospy.loginfo("[STEP 3] Lập kế hoạch điều hướng theo bản đồ...")
+        # 3. Lập kế hoạch Điều hướng
+        final_decision = None
+        is_deviation = False 
+
+        while True:
+            planned_direction_label = self.navigator.get_next_direction_label(self.current_node_id, self.planned_path)
+            if not planned_direction_label:
+                rospy.logerr("Lỗi kế hoạch: Không tìm thấy bước tiếp theo.") 
+                self._set_state(RobotState.DEAD_END) 
+                return
+            
+            planned_action = self.map_absolute_to_relative(planned_direction_label, current_direction)
+            rospy.loginfo(f"Kế hoạch A* đề xuất: Đi {planned_action} (hướng {planned_direction_label})")
+
+            # Ưu tiên 1: Biển báo bắt buộc
+            intended_action = None
+            if 'L' in prescriptive_cmds: intended_action = 'left'
+            elif 'R' in prescriptive_cmds: intended_action = 'right'
+            elif 'F' in prescriptive_cmds: intended_action = 'straight'
+            
+            # Ưu tiên 2: Plan
+            if intended_action is None:
+                intended_action = planned_action
+            else:
+                # Nếu hành động bắt buộc khác với kế hoạch, đánh dấu là đi chệch hướng
+                if intended_action != planned_action:
+                    is_deviation = True
+                    rospy.logwarn(f"CHỆCH HƯỚNG! Biển báo bắt buộc ({intended_action}) khác với kế hoạch ({planned_action}).")
+
+            # 3.3. Veto bởi biển báo cấm
+            is_prohibited = (intended_action == 'straight' and 'NF' in prohibitive_cmds) or \
+                            (intended_action == 'right' and 'NR' in prohibitive_cmds) or \
+                            (intended_action == 'left' and 'NL' in prohibitive_cmds)
+
+            if is_prohibited:
+                rospy.logwarn(f"Hành động dự định '{intended_action}' bị CẤM!")
+                
+                # Nếu hành động bị cấm đến từ biển báo bắt buộc -> Lỗi bản đồ
+                if is_deviation:
+                    rospy.logerr("LỖI BẢN ĐỒ! Biển báo bắt buộc mâu thuẫn với biển báo cấm. Không thể đi tiếp.")
+                    self._set_state(RobotState.DEAD_END) 
+                    return
+                
+                # Nếu hành động bị cấm đến từ kế hoạch A* -> Tìm đường lại
+                banned_edge = (self.current_node_id, self.planned_path[self.planned_path.index(self.current_node_id) + 1])
+                if banned_edge not in self.banned_edges:
+                    self.banned_edges.append(banned_edge)
+                
+                rospy.loginfo(f"Thêm cạnh cấm {banned_edge} và tìm đường lại...")
+                new_path = self.navigator.find_path(self.current_node_id, self.navigator.end_node, self.banned_edges)
+                
+                if new_path:
+                    self.planned_path = new_path
+                    rospy.loginfo(f"Đã tìm thấy đường đi mới: {self.planned_path}")
+                    continue # Quay lại đầu vòng lặp để kiểm tra với kế hoạch mới
+                else:
+                    rospy.logerr("Không thể tìm đường đi mới sau khi gặp biển cấm.")
+                    self._set_state(RobotState.DEAD_END)
+                    return
+            
+            final_decision = intended_action
+            break 
+
+        # 4. Thực thi quyết định
+        if final_decision == 'straight': 
+            rospy.loginfo("[FINAL] Decision: Go STRAIGHT.")
+        elif final_decision == 'right': 
+            rospy.loginfo("[FINAL] Decision: Turn RIGHT.") 
+            self.turn_robot(90, True)
+        elif final_decision == 'left': 
+            rospy.loginfo("[FINAL] Decision: Turn LEFT.") 
+            self.turn_robot(-90, True)
+        else:
+            rospy.logwarn("[!!!] DEAD END! No valid paths found.") 
+            self._set_state(RobotState.DEAD_END)
+            return
+        
+        # 5. Cập nhật trạng thái robot sau khi thực hiện
+        # 5.1. Xác định node tiếp theo
+        next_node_id = None
+        if not is_deviation:
+            # Nếu đi theo kế hoạch, chỉ cần lấy node tiếp theo từ path
+            next_node_id = self.planned_path[self.planned_path.index(self.current_node_id) + 1]
+        else:
+            # Nếu chệch hướng, phải tìm node tiếp theo dựa trên hành động đã thực hiện
+            
+            new_robot_direction = self.DIRECTIONS[self.current_direction_index] 
+            
+            executed_direction_label = None
+            for label, direction_enum in self.LABEL_TO_DIRECTION_ENUM.items():
+                if direction_enum == new_robot_direction:
+                    executed_direction_label = label 
+                    break
+            
+            if executed_direction_label is None:
+                rospy.logerr("Lỗi logic: Không thể tìm thấy label cho hướng đi mới của robot.") 
+                self._set_state(RobotState.DEAD_END) 
+                return
+
+            next_node_id = self.navigator.get_neighbor_by_direction(self.current_node_id, executed_direction_label)
+            if next_node_id is None:
+                 rospy.logerr("LỖI BẢN ĐỒ! Đã thực hiện rẽ nhưng không có node tương ứng.")
+                 self._set_state(RobotState.DEAD_END)
+                 return
+            
+            # Quan trọng: Lập kế hoạch lại từ vị trí mới
+            rospy.loginfo(f"Đã đi chệch kế hoạch. Lập lại đường đi từ node mới {next_node_id}...")
+            new_path = self.navigator.find_path(next_node_id, self.navigator.end_node, self.banned_edges)
+            if new_path:
+                self.planned_path = new_path
+                rospy.loginfo(f"Đường đi mới sau khi chệch hướng: {self.planned_path}")
+            else:
+                rospy.logerr("Không thể tìm đường về đích từ vị trí mới.")
+                self._set_state(RobotState.DEAD_END)
+                return
+
+        self.target_node_id = next_node_id
+        rospy.loginfo(f"==> Đang di chuyển đến node tiếp theo: {self.target_node_id}")
+        self._set_state(RobotState.LEAVING_INTERSECTION)
+    
+    def turn_robot(self, degrees, update_main_direction=True):
+        duration = abs(degrees) / 90.0 * self.TURN_DURATION_90_DEG
+        if degrees > 0: 
+            self.robot.set_motors(self.TURN_SPEED, -self.TURN_SPEED)
+        elif degrees < 0: 
+            self.robot.set_motors(-self.TURN_SPEED, self.TURN_SPEED)
+        if degrees != 0: 
+            start_time = rospy.get_time()
+            while rospy.get_time() - start_time < duration:
+                # Ghi lại khung hình trong khi robot đang quay
+                self._record_frame()
+                # Thêm một khoảng nghỉ nhỏ để không làm quá tải CPU và để ROS có thời gian cập nhật
+                rospy.sleep(1.0 / self.VIDEO_FPS)
+
+        self.robot.stop()
+        if update_main_direction and degrees % 90 == 0 and degrees != 0:
+            num_turns = round(degrees / 90)
+            self.current_direction_index = (self.current_direction_index + num_turns + 4) % 4
+            rospy.loginfo(f"==> Hướng đi MỚI: {self.DIRECTIONS[self.current_direction_index].name}")
+        time.sleep(0.5)
+        self._record_frame()
+    
+    def _does_path_exist_in_frame(self, image):
+        if image is None: return False
+        roi = image[self.ROI_Y : self.ROI_Y + self.ROI_H, :]
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        mask = cv2.inRange(hsv, self.LINE_COLOR_LOWER, self.LINE_COLOR_UPPER)
+        _img, contours, _hierarchy = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        return bool(contours) and cv2.contourArea(max(contours, key=cv2.contourArea)) > self.SCAN_PIXEL_THRESHOLD
+    
+    def scan_for_available_paths_proactive(self):
+        rospy.loginfo("[SCAN] Bắt đầu quét chủ động...")
+        paths = {"straight": False, "right": False, "left": False}
+        if self.latest_image is not None:
+            paths["straight"] = self._does_path_exist_in_frame(self.latest_image)
+        self.turn_robot(90, update_main_direction=False)
+        time.sleep(0.5)
+        if self.latest_image is not None:
+            paths["right"] = self._does_path_exist_in_frame(self.latest_image)
+        self.turn_robot(-180, update_main_direction=False)
+        time.sleep(0.5)
+        if self.latest_image is not None:
+            paths["left"] = self._does_path_exist_in_frame(self.latest_image)
+        self.turn_robot(90, update_main_direction=False)
+        rospy.loginfo(f"[SCAN] Kết quả: {paths}")
+        return paths
+
+    def stream_socket(self):
+        """Gửi ảnh liên tục qua TCP socket dưới dạng length-prefixed JPEG."""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.connect((self.server_ip, self.server_port))
+            rospy.loginfo("Đã kết nối tới server để stream video.")
+
+            while self.streaming and not rospy.is_shutdown():
+                if self.debugzzz is not None:
+                    # Nén thành JPEG
+                    ret, jpeg = cv2.imencode(".jpg", self.debugzzz)
+                    data = jpeg.tobytes()
+                    # Gửi độ dài trước (4 bytes) rồi gửi ảnh
+                    sock.sendall(struct.pack(">L", len(data)) + data)
+                time.sleep(0.05)  # ~20 FPS
+        except Exception as e:
+            rospy.logerr(f"Lỗi streaming: {e}")
+
+
+def main():
+    rospy.init_node('jetbot_controller_node', anonymous=True)
+    try:
+        controller = JetBotController()
+        controller.run()
+    except rospy.ROSInterruptException: rospy.loginfo("Node đã bị ngắt.")
+    except Exception as e: rospy.logerr(f"Lỗi không xác định: {e}", exc_info=True)
+
+if __name__ == '__main__':
+    main()

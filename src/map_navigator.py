@@ -74,6 +74,11 @@ class MapNavigator:
         pos2 = self.nodes_data[node2_id]
         return math.sqrt((pos1['x'] - pos2['x'])**2 + (pos1['y'] - pos2['y'])**2)
 
+    def get_direction_label_between(self, u, v):
+        """Trả về nhãn hướng (N/E/S/W) của cạnh u->v, hoặc None nếu không có."""
+        data = self.graph.get_edge_data(u, v)
+        return data.get('label') if data else None
+
     def find_path(self, start_node_id, end_node_id, banned_edges=None):
         """
         Tìm đường đi từ start -> tất cả các load nodes (nếu có) -> end bằng A*.

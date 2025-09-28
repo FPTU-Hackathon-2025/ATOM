@@ -153,7 +153,7 @@ class JetBotController:
         self.SCAN_PIXEL_THRESHOLD = 100
         self.YOLO_MODEL_PATH = "models/best.onnx"
         self.YOLO_CONF_THRESHOLD = 0.6
-        self.YOLO_INPUT_SIZE = (640, 640)
+        self.YOLO_INPUT_SIZE = (416, 416)
         self.YOLO_CLASS_NAMES = ['N', 'E', 'W', 'S', 'NN', 'NE', 'NW', 'NS', 'math', 'symbol', 'alphabet']
         self.PRESCRIPTIVE_SIGNS = {'N', 'E', 'W', 'S'}
         self.PROHIBITIVE_SIGNS = {'NN', 'NE', 'NW', 'NS'}
@@ -390,7 +390,7 @@ class JetBotController:
             # TRẠNG THÁI 2: ĐANG TIẾN VÀO GIAO LỘ (APPROACHING_INTERSECTION)
             # ===================================================================
 
-                if time.time() - self.last_detection_time >= 2.0:  # mỗi 3 giây
+                if time.time() - self.last_detection_time >= 5.0:  # mỗi 3 giây
                     image_info = self.latest_image
                     detections = self.detect_with_yolo(image_info)
                     rospy.loginfo(detections)
