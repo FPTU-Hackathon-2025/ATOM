@@ -415,32 +415,6 @@ class JetBotController:
 
         data = response.json()
 
-        # Lấy tọa độ box và chuyển đổi về ảnh gốc
-        x, y, w, h = predictions[:, 0], predictions[:, 1], predictions[:, 2], predictions[:, 3]
-
-        # Tính toán tỷ lệ scale để chuyển đổi tọa độ
-        x_scale = original_width / self.YOLO_INPUT_SIZE[0]
-        y_scale = original_height / self.YOLO_INPUT_SIZE[1]
-
-        # Chuyển từ [center_x, center_y, width, height] sang [x1, y1, x2, y2]
-        x1 = (x - w / 2) * x_scale
-        y1 = (y - h / 2) * y_scale
-        x2 = (x + w / 2) * x_scale
-        y2 = (y + h / 2) * y_scale
-
-        # Chuyển thành list các box và scores
-        boxes = np.column_stack((x1, y1, x2, y2)).tolist()
-
-        # 4. Thực hiện Non-Maximum Suppression (NMS)
-        # Đây là một bước cực kỳ quan trọng để loại bỏ các box trùng lặp
-        # OpenCV cung cấp một hàm NMS hiệu quả
-        nms_threshold = 0.45 # Ngưỡng IOU để loại bỏ box
-        indices = self.numpy_nms(np.array(boxes), scores, nms_threshold)
-
-        if len(indices) == 0:
-            rospy.loginfo("YOLO: Sau NMS, không còn đối tượng nào.")
-            return []
-
         # 5. Tạo danh sách kết quả cuối cùng
         final_detections = []
         if "boxes" in data:
