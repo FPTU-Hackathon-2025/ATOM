@@ -79,74 +79,113 @@ class MapNavigator:
         data = self.graph.get_edge_data(u, v)
         return data.get('label') if data else None
 
-    def find_path(self, start_node_id, end_node_id, banned_edges=None):
+    def find_path(
+    self,
+    start_node_id,
+    end_node_id,
+    banned_edges=None,
+    *,
+    no_reuse_edges=True,
+    forbid_reverse=True
+):
         """
-        Tìm đường đi từ start -> tất cả các load nodes (nếu có) -> end bằng A*.
-        Nếu không có load node, hoạt động như tìm đường ngắn nhất bình thường.
-        :param start_node_id: ID của node bắt đầu.
-        :param end_node_id: ID của node kết thúc.
-        :param banned_edges: List các cạnh (u, v) bị cấm, dùng để tìm đường lại.
-        :return: List các ID node trên đường đi, hoặc None nếu không có đường.
-        """
-        # Chuẩn bị graph tạm (có thể loại bỏ banned_edges nếu có)
-        graph_to_search = self.graph.copy()
-        if banned_edges:
-            graph_to_search.remove_edges_from(banned_edges)
+        Tìm đường đi từ start -> tất cả các load nodes (nếu có) -> end bằng A*,
+        và tránh đi lại các đoạn đã đi hoặc quay đầu.
 
-        # Lấy danh sách load nodes
+        :param start_node_id: node bắt đầu
+        :param end_node_id: node kết thúc
+        :param banned_edges: list [(u, v)] cạnh cấm ngay từ đầu
+        :param no_reuse_edges: nếu True, không dùng lại cạnh vừa đi (cả 2 chiều)
+        :param forbid_reverse: nếu True, tối thiểu cấm cạnh ngược chiều vừa đi (chống quay đầu)
+        :return: list node id tạo thành đường đi, hoặc None nếu không có
+        """
+        import copy
+        from itertools import permutations
+        import networkx as nx
+
+        # ---- helpers ----
+        def _apply_bans(g, edges):
+            if edges:
+                g.remove_edges_from(edges)
+
+        def _remove_traversed_edges(g, path):
+            """Sau khi có sub_path, loại bỏ cạnh vừa đi để tránh retrace/quay đầu."""
+            for i in range(len(path) - 1):
+                u, v = path[i], path[i+1]
+                # luôn loại tối thiểu cạnh ngược chiều để tránh quay đầu
+                if forbid_reverse and g.has_edge(v, u):
+                    g.remove_edge(v, u)
+                # nếu cấm dùng lại đoạn vừa đi, loại cả 2 chiều (xem như đường đã đi rồi)
+                if no_reuse_edges:
+                    if g.has_edge(u, v):
+                        g.remove_edge(u, v)
+                    if g.has_edge(v, u):
+                        g.remove_edge(v, u)
+
+        # ---- chuẩn bị đồ thị cơ sở (copy để không đụng self.graph) ----
+        base_graph = self.graph.copy()
+        if banned_edges:
+            _apply_bans(base_graph, banned_edges)
+
+        # ---- lấy danh sách load nodes ----
         load_nodes = [n for n, d in self.nodes_data.items() if d["type"].lower() == "load"]
 
-        # Trường hợp không có load node -> chạy A* như cũ
+        # ---- không có load: chạy A* một phát, vẫn áp ràng buộc không quay đầu khi cần ----
         if not load_nodes:
             try:
-                return nx.astar_path(
-                    graph_to_search,
-                    start_node_id,
-                    end_node_id,
-                    heuristic=self._heuristic
-                )
+                path = nx.astar_path(base_graph, start_node_id, end_node_id, heuristic=self._heuristic)
+                # tuỳ chọn: nếu muốn đảm bảo không quay đầu trong path đơn này, có thể kiểm tra pattern (u,v)->(v,u) liền kề
+                # nhưng A* trên đồ thị có hướng hiếm khi tạo U-turn liền kề. Bỏ qua để giữ nguyên tốc độ.
+                return path
             except nx.NetworkXNoPath:
                 return None
 
-        # Có load nodes -> phải đi qua tất cả
+        # ---- có load: thử mọi hoán vị load order, mỗi order chạy trên 1 bản sao đồ thị còn lại ----
         best_path = None
         best_length = float("inf")
 
         for order in permutations(load_nodes):
+            # đồ thị làm việc cho order này (sẽ bị cắt cạnh dần)
+            g_work = base_graph.copy()
             candidate_path = []
             valid = True
 
-            # 1. start -> load đầu tiên
+            # 1) start -> load đầu
             try:
-                sub_path = nx.astar_path(graph_to_search, start_node_id, order[0], heuristic=self._heuristic)
+                sub_path = nx.astar_path(g_work, start_node_id, order[0], heuristic=self._heuristic)
             except nx.NetworkXNoPath:
                 continue
             candidate_path.extend(sub_path)
+            _remove_traversed_edges(g_work, sub_path)
 
-            # 2. đi qua các load tiếp theo
+            # 2) đi qua các load tiếp theo
             for i in range(len(order) - 1):
                 try:
-                    sub_path = nx.astar_path(graph_to_search, order[i], order[i+1], heuristic=self._heuristic)
-                    candidate_path.extend(sub_path[1:])  # bỏ node trùng
+                    sub_path = nx.astar_path(g_work, order[i], order[i+1], heuristic=self._heuristic)
+                    # nối, bỏ node trùng
+                    candidate_path.extend(sub_path[1:])
+                    _remove_traversed_edges(g_work, sub_path)
                 except nx.NetworkXNoPath:
                     valid = False
                     break
             if not valid:
                 continue
 
-            # 3. load cuối -> end
+            # 3) load cuối -> end
             try:
-                sub_path = nx.astar_path(graph_to_search, order[-1], end_node_id, heuristic=self._heuristic)
+                sub_path = nx.astar_path(g_work, order[-1], end_node_id, heuristic=self._heuristic)
                 candidate_path.extend(sub_path[1:])
+                _remove_traversed_edges(g_work, sub_path)
             except nx.NetworkXNoPath:
                 continue
 
-            # Đánh giá độ dài
+            # đánh giá (dùng độ dài node hoặc có thể dùng tổng trọng số nếu bạn có weight)
             if len(candidate_path) < best_length:
                 best_length = len(candidate_path)
                 best_path = candidate_path
 
         return best_path
+
 
     def get_next_direction_label(self, current_node_id, path):
         """
