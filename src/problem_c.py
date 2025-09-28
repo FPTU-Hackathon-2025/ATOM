@@ -28,7 +28,7 @@ from map_navigator import MapNavigator
 DOMAIN = "https://hackathon2025-dev.fpt.edu.vn"
 token = "7437f6b784f59029d38b71799c713c72"
 url = f"{DOMAIN}/api/sign-submissions/submit/"
-map_type = "map_z"
+map_type = "map_z" # TODO: khi deploy đổi qua map_c?
 
 class RobotState(Enum):
     WAITING_FOR_LINE = 0
