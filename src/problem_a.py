@@ -28,7 +28,7 @@ from map_navigator import MapNavigator
 DOMAIN = "https://hackathon2025-dev.fpt.edu.vn"
 token = "7437f6b784f59029d38b71799c713c72"
 url = f"{DOMAIN}/api/sign-submissions/submit/"
-map_type = "map_z" # TODO: khi deploy đổi qua map_a
+map_type = "map_a"
 
 class RobotState(Enum):
     WAITING_FOR_LINE = 0
@@ -332,7 +332,7 @@ class JetBotController:
 
         self.ANGLE_TO_FACE_SIGN_MAP = {d: a for d, a in zip(self.DIRECTIONS, [45, -45, -135, 135])}
         self.MAX_CORRECTION_ADJ = 0.12
-        self.MAP_TYPE = "map_z"
+        self.MAP_TYPE = map_type
         self.LABEL_TO_DIRECTION_ENUM = {'N': Direction.NORTH, 'E': Direction.EAST, 'S': Direction.SOUTH, 'W': Direction.WEST}
         self.VIDEO_OUTPUT_FILENAME = 'jetbot_run.mp4'
         self.VIDEO_FPS = 20  # Nên khớp với rospy.Rate của bạn
@@ -803,49 +803,51 @@ class JetBotController:
         detections = self.detect_with_yolo(image_info)
         self.turn_robot(-angle_to_sign, False)
 
-        boxes = detections['boxes']
-        prescriptive_cmds = {det['class_name'] for det in boxes if det['class_name'] in self.PRESCRIPTIVE_SIGNS}
-        prohibitive_cmds = {det['class_name'] for det in boxes if det['class_name'] in self.PROHIBITIVE_SIGNS}
-        data_items = [det for det in boxes if det['class_name'] in self.DATA_ITEMS]
-
-        # 2. Xử lý các mục dữ liệu (QR, Toán) và Publish
-        rospy.loginfo("[STEP 2] Processing data items...")
-        if len(data_items) > 1:
-            finalText = '_'.join(sorted([box['class_name'].upper() for box in data_items]))
-        else:
-            finalText = boxes[0]['class_name'].upper()
-        if finalText == 'QR_CODE':
-            rospy.loginfo("Found QR Code. Publishing data...")
-            # TODO: thay text và node_id bằng dữ liệu thực tế
-            body = {
-                "text": "QR Code",
-                "node_id": self.current_node_id,
-                "token": token,
-                "map_type": map_type
-            }
-        elif finalText == 'MATH_PROBLEM' or finalText == 'MATH':
-            rospy.loginfo("Found Math Problem. Solving and publishing...")
-            # TODO: Giải toán và thay text bằng kết quả thực tế
-            body = {
-                "text": "1",
-                "node_id": self.current_node_id,
-                "token": token,
-                "map_type": map_type
-            }
-        else:
-            rospy.loginfo("Found Object Image. Publishing data...")
-            body = {
-                "text": finalText,
-                "node_id": self.current_node_id,
-                "token": token,
-                "map_type": map_type
-            }
-
         try:
-            self.publish_data(body)
-            rospy.loginfo(f"Published data for {finalText}.")
+            prescriptive_cmds = {det['class_name'] for det in detections if det['class_name'] in self.PRESCRIPTIVE_SIGNS}
+            prohibitive_cmds = {det['class_name'] for det in detections if det['class_name'] in self.PROHIBITIVE_SIGNS}
+            data_items = [det for det in detections if det['class_name'] in self.DATA_ITEMS]
+
+            # 2. Xử lý các mục dữ liệu (QR, Toán) và Publish
+            rospy.loginfo("[STEP 2] Processing data items...")
+            if len(data_items) > 1:
+                finalText = '_'.join(sorted(data['class_name'].upper() for data in data_items))
+            else:
+                finalText = data_items[0]['class_name'].upper()
+            if finalText == 'QR_CODE':
+                rospy.loginfo("Found QR Code. Publishing data...")
+                # TODO: thay text và node_id bằng dữ liệu thực tế
+                body = {
+                    "text": "QR Code",
+                    "node_id": self.current_node_id,
+                    "token": token,
+                    "map_type": map_type
+                }
+            elif finalText == 'MATH_PROBLEM' or finalText == 'MATH':
+                rospy.loginfo("Found Math Problem. Solving and publishing...")
+                # TODO: Giải toán và thay text bằng kết quả thực tế
+                body = {
+                    "text": "1",
+                    "node_id": self.current_node_id,
+                    "token": token,
+                    "map_type": map_type
+                }
+            else:
+                rospy.loginfo("Found Object Image. Publishing data...")
+                body = {
+                    "text": finalText,
+                    "node_id": self.current_node_id,
+                    "token": token,
+                    "map_type": map_type
+                }
+
+            try:
+                self.publish_data(body)
+                rospy.loginfo(f"Published data for {finalText}.")
+            except Exception as e:
+                rospy.logerr(f"Failed to publish data for {finalText}: {e}")
         except Exception as e:
-            rospy.logerr(f"Failed to publish data for {finalText}: {e}")
+            rospy.logerr(f"Error processing data items: {e}")
 
         rospy.loginfo("[STEP 3] Lập kế hoạch điều hướng theo bản đồ...")
         # 3. Lập kế hoạch Điều hướng

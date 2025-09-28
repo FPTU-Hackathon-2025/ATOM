@@ -28,7 +28,8 @@ from map_navigator import MapNavigator
 DOMAIN = "https://hackathon2025-dev.fpt.edu.vn"
 token = "7437f6b784f59029d38b71799c713c72"
 url = f"{DOMAIN}/api/sign-submissions/submit/"
-map_type = "map_z" # TODO: khi deploy đổi qua map_c?
+map_type = "map_z"
+
 
 class RobotState(Enum):
     WAITING_FOR_LINE = 0
@@ -40,8 +41,10 @@ class RobotState(Enum):
     DEAD_END = 6
     GOAL_REACHED = 7
 
+
 class Direction(Enum):
     NORTH, EAST, SOUTH, WEST = 0, 1, 2, 3
+
 
 class JetBotController:
     def __init__(self):
@@ -76,7 +79,6 @@ class JetBotController:
         self.server_ip = "10.34.181.110"
         self.server_port = 6628
         threading.Thread(target=self.stream_socket, daemon=True).start()
-
 
         rospy.loginfo("Khởi tạo hoàn tất. Sẵn sàng hoạt động.")
 
@@ -119,13 +121,13 @@ class JetBotController:
         H, S, V = cv2.split(hsv)
 
         # --- 0) Ngưỡng động theo percentile để chịu đựng thay đổi ánh sáng ---
-        v_dark = int(np.clip(np.percentile(V, 25), 60, 130))   # “tối” tương đối
-        s_lo   = 90                                            # đen thường có bão hòa thấp-vừa
+        v_dark = int(np.clip(np.percentile(V, 25), 60, 130))  # “tối” tương đối
+        s_lo = 90  # đen thường có bão hòa thấp-vừa
 
         # --- 1) Mask tối (HSV) ---
         hsv_dark = cv2.inRange(hsv,
-                            np.array([0,   0,     0], dtype=np.uint8),
-                            np.array([179, s_lo, v_dark], dtype=np.uint8))
+                               np.array([0, 0, 0], dtype=np.uint8),
+                               np.array([179, s_lo, v_dark], dtype=np.uint8))
 
         # --- 2) Adaptive threshold (grayscale, đảo) để giữ đường trong nền sáng ---
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
@@ -139,8 +141,8 @@ class JetBotController:
 
         # --- 3) Khử đốm loé (specular): S rất thấp & V rất cao -> gần trắng bóng ---
         specular = cv2.inRange(hsv,
-                            np.array([0,   0,   200], dtype=np.uint8),
-                            np.array([179, 35, 255], dtype=np.uint8))
+                               np.array([0, 0, 200], dtype=np.uint8),
+                               np.array([179, 35, 255], dtype=np.uint8))
         specular = cv2.medianBlur(specular, 3)
 
         # --- 4) Hợp nhất & khử loé ---
@@ -158,7 +160,7 @@ class JetBotController:
         final_mask = cv2.bitwise_and(final_mask, cv2.bitwise_not(specular))
 
         # --- 5) Hình thái học để liền nét & bớt răng cưa ---
-        k = np.ones((3,3), np.uint8)
+        k = np.ones((3, 3), np.uint8)
         final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_CLOSE, k, iterations=1)
         final_mask = cv2.medianBlur(final_mask, 3)
 
@@ -167,12 +169,13 @@ class JetBotController:
     def _strip4(self, roi_bgr, color_mask, focus_mask, final_mask, label,
                 tile_h=90, tile_w=120):
         """Ghép 4 ô: ROI | color | focus | final (đã resize), kèm nhãn."""
+
         def to_bgr(img):
-            if len(img.shape) == 2:   # mask GRAY -> BGR
+            if len(img.shape) == 2:  # mask GRAY -> BGR
                 img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
             return cv2.resize(img, (tile_w, tile_h), interpolation=cv2.INTER_AREA)
 
-        t_roi   = to_bgr(roi_bgr)
+        t_roi = to_bgr(roi_bgr)
         t_color = to_bgr(color_mask)
         t_focus = to_bgr(focus_mask)
         t_final = to_bgr(final_mask)
@@ -183,13 +186,16 @@ class JetBotController:
         cv2.putText(strip, label, (6, tile_h - 8),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1, cv2.LINE_AA)
         # Nhãn từng ô
-        off = 5; step = tile_w
-        cv2.putText(strip, "roi",   (off + step*0, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (220,220,220), 1, cv2.LINE_AA)
-        cv2.putText(strip, "color", (off + step*1, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (220,220,220), 1, cv2.LINE_AA)
-        cv2.putText(strip, "focus", (off + step*2, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (220,220,220), 1, cv2.LINE_AA)
-        cv2.putText(strip, "final", (off + step*3, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (220,220,220), 1, cv2.LINE_AA)
+        off = 5;
+        step = tile_w
+        cv2.putText(strip, "roi", (off + step * 0, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (220, 220, 220), 1, cv2.LINE_AA)
+        cv2.putText(strip, "color", (off + step * 1, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (220, 220, 220), 1,
+                    cv2.LINE_AA)
+        cv2.putText(strip, "focus", (off + step * 2, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (220, 220, 220), 1,
+                    cv2.LINE_AA)
+        cv2.putText(strip, "final", (off + step * 3, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (220, 220, 220), 1,
+                    cv2.LINE_AA)
         return strip
-
 
     def _compute_tile_size(self, cols=4, margin=6, max_tile_h=90):
         """
@@ -202,7 +208,6 @@ class JetBotController:
         # tile_h giữ tỉ lệ tùy ý; ở đây lấy ~0.75 * tile_w nhưng không vượt max_tile_h
         tile_h = min(max_tile_h, int(tile_w * 0.75))
         return tile_h, tile_w, margin
-
 
     def _paste_safe(self, dst, tile, x, y):
         """Dán tile vào dst tại (x,y), tự cắt nếu vượt khung để tránh broadcast error."""
@@ -228,7 +233,7 @@ class JetBotController:
         if w_fit <= 0 or h_fit <= 0:
             return
 
-        dst[y:y+h_fit, x:x+w_fit] = tile[0:h_fit, 0:w_fit]
+        dst[y:y + h_fit, x:x + w_fit] = tile[0:h_fit, 0:w_fit]
 
     def draw_debug_info(self, image):
         """Vẽ thông tin gỡ lỗi + 2 strip (mỗi strip 4 ô cạnh nhau) vào debug_frame."""
@@ -239,9 +244,9 @@ class JetBotController:
 
         # Vẽ khung 2 ROI
         cv2.rectangle(debug_frame, (0, self.ROI_Y),
-                    (self.WIDTH-1, self.ROI_Y + self.ROI_H), (0, 255, 0), 1)
+                      (self.WIDTH - 1, self.ROI_Y + self.ROI_H), (0, 255, 0), 1)
         cv2.rectangle(debug_frame, (0, self.LOOKAHEAD_ROI_Y),
-                    (self.WIDTH-1, self.LOOKAHEAD_ROI_Y + self.LOOKAHEAD_ROI_H), (0, 255, 255), 1)
+                      (self.WIDTH - 1, self.LOOKAHEAD_ROI_Y + self.LOOKAHEAD_ROI_H), (0, 255, 255), 1)
 
         # State text
         st = f"State: {self.current_state.name if self.current_state else 'N/A'}"
@@ -253,7 +258,7 @@ class JetBotController:
             lc = self._get_line_center(image, self.ROI_Y, self.ROI_H)
             if lc is not None:
                 cv2.line(debug_frame, (lc, self.ROI_Y),
-                        (lc, self.ROI_Y + self.ROI_H), (0, 0, 255), 2)
+                         (lc, self.ROI_Y + self.ROI_H), (0, 0, 255), 2)
 
         # === Tạo 2 strip (mỗi strip gồm 4 ô cạnh nhau) ===
         try:
@@ -287,7 +292,6 @@ class JetBotController:
 
         return debug_frame
 
-
     def setup_parameters(self):
         self.INTERSECTION_COOLDOWN = 3.0  # phải qua 3s mới cho phép vào giao lộ mới
         self.MINIMUM_TRAVEL_TIME = 2.0  # Thời gian tối thiểu trước khi xử lý giao lộ (giây)
@@ -300,8 +304,8 @@ class JetBotController:
         self.ROI_Y = int(self.HEIGHT * 0.85)
         self.ROI_H = int(self.HEIGHT * 0.15)
         self.ROI_CENTER_WIDTH_PERCENT = 0.5
-        self.LOOKAHEAD_ROI_Y = int(self.HEIGHT * 0.60) # Vị trí Y cao hơn
-        self.LOOKAHEAD_ROI_H = int(self.HEIGHT * 0.15) # Chiều cao tương tự
+        self.LOOKAHEAD_ROI_Y = int(self.HEIGHT * 0.60)  # Vị trí Y cao hơn
+        self.LOOKAHEAD_ROI_H = int(self.HEIGHT * 0.15)  # Chiều cao tương tự
 
         self.CORRECTION_GAIN = 0.5
         self.SAFE_ZONE_PERCENT = 0.3
@@ -317,21 +321,22 @@ class JetBotController:
         self.YOLO_CLASS_NAMES = ['N', 'E', 'W', 'S', 'NN', 'NE', 'NW', 'NS', 'math']
         self.PRESCRIPTIVE_SIGNS = {'N', 'E', 'W', 'S'}
         self.PROHIBITIVE_SIGNS = {'NN', 'NE', 'NW', 'NS'}
-        self.DATA_ITEMS = {'qr_code', 'math_problem'}
+        self.DATA_ITEMS = {'qr_code', 'math_problem', 'math', 'L', 'E', 'NS', 'S', 'N', 'W', 'NW', 'NE', 'NN',
+                           'triangle', 'diamond', 'octagon', 'rocket', 'hexagon', 'lollipop', 'umbrella',
+                           'corona', 'reddiamond', 'square', 'circle', 'star', 'barcode'}
         self.MQTT_BROKER = "localhost"
         self.MQTT_PORT = 1883
         self.MQTT_DATA_TOPIC = "jetbot/corrected_event_data"
         self.current_state = None
         self.DIRECTIONS = [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST]
 
-
-        self.current_direction_index = 1 #hướng start là 1 (E), phải sửa thuật toán này ?
-
+        self.current_direction_index = 1  # hướng start là 1 (E), phải sửa thuật toán này ?
 
         self.ANGLE_TO_FACE_SIGN_MAP = {d: a for d, a in zip(self.DIRECTIONS, [45, -45, -135, 135])}
         self.MAX_CORRECTION_ADJ = 0.12
-        self.MAP_TYPE = map_type
-        self.LABEL_TO_DIRECTION_ENUM = {'N': Direction.NORTH, 'E': Direction.EAST, 'S': Direction.SOUTH, 'W': Direction.WEST}
+        self.MAP_TYPE = "map_z"
+        self.LABEL_TO_DIRECTION_ENUM = {'N': Direction.NORTH, 'E': Direction.EAST, 'S': Direction.SOUTH,
+                                        'W': Direction.WEST}
         self.VIDEO_OUTPUT_FILENAME = 'jetbot_run.mp4'
         self.VIDEO_FPS = 20  # Nên khớp với rospy.Rate của bạn
         # Codec 'MJPG' rất phổ biến và tương thích tốt
@@ -349,7 +354,8 @@ class JetBotController:
     def initialize_yolo(self):
         """Tải mô hình YOLO vào ONNX Runtime."""
         try:
-            self.yolo_session = ort.InferenceSession(self.YOLO_MODEL_PATH, providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+            self.yolo_session = ort.InferenceSession(self.YOLO_MODEL_PATH,
+                                                     providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
             rospy.loginfo("Tải mô hình YOLO thành công.")
         except Exception as e:
             rospy.logerr(f"Không thể tải mô hình YOLO từ '{self.YOLO_MODEL_PATH}'. Lỗi: {e}")
@@ -426,7 +432,7 @@ class JetBotController:
                         int(box["x1"]),
                         int(box["y1"]),
                         int(box["x2"] - box["x1"]),  # width
-                        int(box["y2"] - box["y1"])   # height
+                        int(box["y2"] - box["y1"])  # height
                     ]
                 })
 
@@ -435,12 +441,16 @@ class JetBotController:
 
     def initialize_mqtt(self):
         self.mqtt_client = mqtt.Client()
-        def on_connect(client, userdata, flags, rc): rospy.loginfo(f"Kết nối MQTT: {'Thành công' if rc == 0 else 'Thất bại'}")
+
+        def on_connect(client, userdata, flags, rc):
+            rospy.loginfo(f"Kết nối MQTT: {'Thành công' if rc == 0 else 'Thất bại'}")
+
         self.mqtt_client.on_connect = on_connect
         try:
             self.mqtt_client.connect(self.MQTT_BROKER, self.MQTT_PORT, 60)
             self.mqtt_client.loop_start()
-        except Exception as e: rospy.logerr(f"Không thể kết nối MQTT: {e}")
+        except Exception as e:
+            rospy.logerr(f"Không thể kết nối MQTT: {e}")
 
     def _set_state(self, new_state, initial=False):
         if self.current_state != new_state:
@@ -457,7 +467,8 @@ class JetBotController:
                 cv_image = np.frombuffer(image_msg.data, dtype=np.uint8).reshape(image_msg.height, image_msg.width, -1)
             if 'rgb' in image_msg.encoding: cv_image = cv2.cvtColor(cv_image, cv2.COLOR_RGB2BGR)
             self.latest_image = cv2.resize(cv_image, (self.WIDTH, self.HEIGHT))
-        except Exception as e: rospy.logerr(f"Lỗi chuyển đổi ảnh: {e}")
+        except Exception as e:
+            rospy.logerr(f"Lỗi chuyển đổi ảnh: {e}")
 
     def run(self):
         rospy.loginfo("Robot đang chờ lệnh. Nhấn Enter để bắt đầu...")
@@ -551,11 +562,12 @@ class JetBotController:
                         else:
                             self._set_state(RobotState.HANDLING_EVENT)
                             self.handle_intersection()
-                        continue # Bắt đầu vòng lặp mới với trạng thái mới
+                        continue  # Bắt đầu vòng lặp mới với trạng thái mới
 
                 # --- BƯỚC 2: LOGIC "NHÌN XA HƠN" VỚI ROI DỰ BÁO ---
                 # Nếu LiDAR im lặng, kiểm tra xem vạch kẻ có sắp biến mất ở phía xa không.
-                lookahead_line_center = self._get_line_center(self.latest_image, self.LOOKAHEAD_ROI_Y, self.LOOKAHEAD_ROI_H)
+                lookahead_line_center = self._get_line_center(self.latest_image, self.LOOKAHEAD_ROI_Y,
+                                                              self.LOOKAHEAD_ROI_H)
 
                 if lookahead_line_center is None and node_departed:
                     rospy.logwarn("SỰ KIỆN (Dự báo): Vạch kẻ đường biến mất ở phía xa. Chuẩn bị vào giao lộ.")
@@ -568,7 +580,7 @@ class JetBotController:
                         self.last_intersection_time = now
                         # Hành động phòng ngừa: chuyển sang trạng thái đi thẳng vào giao lộ.
                         self._set_state(RobotState.APPROACHING_INTERSECTION)
-                        continue # Bắt đầu vòng lặp mới với trạng thái mới
+                        continue  # Bắt đầu vòng lặp mới với trạng thái mới
 
                 # --- BƯỚC 3: BÁM LINE BÌNH THƯỜNG (NẾU PHÍA TRƯỚC AN TOÀN) ---
                 # Chỉ khi cả LiDAR và ROI Dự báo đều ổn, ta mới thực hiện bám line.
@@ -648,7 +660,6 @@ class JetBotController:
                 if debug_frame is not None:
                     self.video_writer.write(debug_frame)
 
-
             rate.sleep()
         self.cleanup()
 
@@ -721,7 +732,7 @@ class JetBotController:
     def _get_line_center(self, image, roi_y, roi_h):
         """Kiểm tra sự tồn tại và vị trí của vạch kẻ trong một ROI cụ thể."""
         if image is None: return None
-        roi = image[roi_y : roi_y + roi_h, :]
+        roi = image[roi_y: roi_y + roi_h, :]
 
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
 
@@ -748,7 +759,7 @@ class JetBotController:
         # cv2.imshow("Focus Mask", focus_mask)
         # cv2.imshow("Final Mask", final_mask)
         cv2.waitKey(1)
-        
+
         # Tìm contours trên mặt nạ cuối cùng đã được lọc
         _, contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -796,57 +807,54 @@ class JetBotController:
         current_direction = self.DIRECTIONS[self.current_direction_index]
         angle_to_sign = self.ANGLE_TO_FACE_SIGN_MAP.get(current_direction, 0)
 
-        #bắt buộc đọc biển báo
-        self.turn_robot(angle_to_sign -90,False)
-        image_info = self.latest_image
-        detections = self.detect_with_yolo(image_info)
-        self.turn_robot(-angle_to_sign +90, False)
+        if self.navigator.get_node(self.current_node_id).type.lower() == "load":
+            self.turn_robot(angle_to_sign + 90, False)
+            image_info = self.latest_image
+            detections = self.detect_with_yolo(image_info)
+            self.turn_robot(-angle_to_sign - 90, False)
+
+        prescriptive_cmds = {det['class_name'] for det in detections if det['class_name'] in self.PRESCRIPTIVE_SIGNS}
+        prohibitive_cmds = {det['class_name'] for det in detections if det['class_name'] in self.PROHIBITIVE_SIGNS}
+        data_items = [det for det in detections if det['class_name'] in self.DATA_ITEMS]
+
+        # 2. Xử lý các mục dữ liệu (QR, Toán) và Publish
+        rospy.loginfo("[STEP 2] Processing data items...")
+        if len(data_items) > 1:
+            finalText = '_'.join(sorted(data['class_name'].upper() for data in data_items))
+        else:
+            finalText = data_items[0]['class_name'].upper()
+        if finalText == 'QR_CODE':
+            rospy.loginfo("Found QR Code. Publishing data...")
+            # TODO: thay text và node_id bằng dữ liệu thực tế
+            body = {
+                "text": "QR Code",
+                "node_id": self.current_node_id,
+                "token": token,
+                "map_type": map_type
+            }
+        elif finalText == 'MATH_PROBLEM' or finalText == 'MATH':
+            rospy.loginfo("Found Math Problem. Solving and publishing...")
+            # TODO: Giải toán và thay text bằng kết quả thực tế
+            body = {
+                "text": "1",
+                "node_id": self.current_node_id,
+                "token": token,
+                "map_type": map_type
+            }
+        else:
+            rospy.loginfo("Found Object Image. Publishing data...")
+            body = {
+                "text": finalText,
+                "node_id": self.current_node_id,
+                "token": token,
+                "map_type": map_type
+            }
 
         try:
-            prescriptive_cmds = {det['class_name'] for det in detections if det['class_name'] in self.PRESCRIPTIVE_SIGNS}
-            prohibitive_cmds = {det['class_name'] for det in detections if det['class_name'] in self.PROHIBITIVE_SIGNS}
-            data_items = [det for det in detections if det['class_name'] in self.DATA_ITEMS]
-
-            # 2. Xử lý các mục dữ liệu (QR, Toán) và Publish
-            rospy.loginfo("[STEP 2] Processing data items...")
-            if len(data_items) > 1:
-                finalText = '_'.join(sorted(data['class_name'].upper() for data in data_items))
-            else:
-                finalText = data_items[0]['class_name'].upper()
-            if finalText == 'QR_CODE':
-                rospy.loginfo("Found QR Code. Publishing data...")
-                # TODO: thay text và node_id bằng dữ liệu thực tế
-                body = {
-                    "text": "QR Code",
-                    "node_id": self.current_node_id,
-                    "token": token,
-                    "map_type": map_type
-                }
-            elif finalText == 'MATH_PROBLEM' or finalText == 'MATH':
-                rospy.loginfo("Found Math Problem. Solving and publishing...")
-                # TODO: Giải toán và thay text bằng kết quả thực tế
-                body = {
-                    "text": "1",
-                    "node_id": self.current_node_id,
-                    "token": token,
-                    "map_type": map_type
-                }
-            else:
-                rospy.loginfo("Found Object Image. Publishing data...")
-                body = {
-                    "text": finalText,
-                    "node_id": self.current_node_id,
-                    "token": token,
-                    "map_type": map_type
-                }
-
-            try:
-                self.publish_data(body)
-                rospy.loginfo(f"Published data for {finalText}.")
-            except Exception as e:
-                rospy.logerr(f"Failed to publish data for {finalText}: {e}")
+            self.publish_data(body)
+            rospy.loginfo(f"Published data for {finalText}.")
         except Exception as e:
-            rospy.logerr(f"Error processing data items: {e}")
+            rospy.logerr(f"Failed to publish data for {finalText}: {e}")
 
         rospy.loginfo("[STEP 3] Lập kế hoạch điều hướng theo bản đồ...")
         # 3. Lập kế hoạch Điều hướng
@@ -865,9 +873,12 @@ class JetBotController:
 
             # Ưu tiên 1: Biển báo bắt buộc
             intended_action = None
-            if 'L' in prescriptive_cmds: intended_action = 'left'
-            elif 'R' in prescriptive_cmds: intended_action = 'right'
-            elif 'F' in prescriptive_cmds: intended_action = 'straight'
+            if 'L' in prescriptive_cmds:
+                intended_action = 'left'
+            elif 'R' in prescriptive_cmds:
+                intended_action = 'right'
+            elif 'F' in prescriptive_cmds:
+                intended_action = 'straight'
 
             # Ưu tiên 2: Plan
             if intended_action is None:
@@ -876,7 +887,8 @@ class JetBotController:
                 # Nếu hành động bắt buộc khác với kế hoạch, đánh dấu là đi chệch hướng
                 if intended_action != planned_action:
                     is_deviation = True
-                    rospy.logwarn(f"CHỆCH HƯỚNG! Biển báo bắt buộc ({intended_action}) khác với kế hoạch ({planned_action}).")
+                    rospy.logwarn(
+                        f"CHỆCH HƯỚNG! Biển báo bắt buộc ({intended_action}) khác với kế hoạch ({planned_action}).")
 
             # 3.3. Veto bởi biển báo cấm
             is_prohibited = (intended_action == 'straight' and 'NF' in prohibitive_cmds) or \
@@ -893,7 +905,8 @@ class JetBotController:
                     return
 
                 # Nếu hành động bị cấm đến từ kế hoạch A* -> Tìm đường lại
-                banned_edge = (self.current_node_id, self.planned_path[self.planned_path.index(self.current_node_id) + 1])
+                banned_edge = (self.current_node_id,
+                               self.planned_path[self.planned_path.index(self.current_node_id) + 1])
                 if banned_edge not in self.banned_edges:
                     self.banned_edges.append(banned_edge)
 
@@ -903,7 +916,7 @@ class JetBotController:
                 if new_path:
                     self.planned_path = new_path
                     rospy.loginfo(f"Đã tìm thấy đường đi mới: {self.planned_path}")
-                    continue # Quay lại đầu vòng lặp để kiểm tra với kế hoạch mới
+                    continue  # Quay lại đầu vòng lặp để kiểm tra với kế hoạch mới
                 else:
                     rospy.logerr("Không thể tìm đường đi mới sau khi gặp biển cấm.")
                     self._set_state(RobotState.DEAD_END)
@@ -950,9 +963,9 @@ class JetBotController:
 
             next_node_id = self.navigator.get_neighbor_by_direction(self.current_node_id, executed_direction_label)
             if next_node_id is None:
-                 rospy.logerr("LỖI BẢN ĐỒ! Đã thực hiện rẽ nhưng không có node tương ứng.")
-                 self._set_state(RobotState.DEAD_END)
-                 return
+                rospy.logerr("LỖI BẢN ĐỒ! Đã thực hiện rẽ nhưng không có node tương ứng.")
+                self._set_state(RobotState.DEAD_END)
+                return
 
             # Quan trọng: Lập kế hoạch lại từ vị trí mới
             rospy.loginfo(f"Đã đi chệch kế hoạch. Lập lại đường đi từ node mới {next_node_id}...")
@@ -993,7 +1006,7 @@ class JetBotController:
 
     def _does_path_exist_in_frame(self, image):
         if image is None: return False
-        roi = image[self.ROI_Y : self.ROI_Y + self.ROI_H, :]
+        roi = image[self.ROI_Y: self.ROI_Y + self.ROI_H, :]
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         mask = cv2.inRange(hsv, self.LINE_COLOR_LOWER, self.LINE_COLOR_UPPER)
         _img, contours, _hierarchy = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -1027,7 +1040,7 @@ class JetBotController:
             rospy.loginfo(f"QR Code data submitted successfully. Status code: {response.status_code}")
         except requests.exceptions.RequestException as e:
             rospy.logerr(f"Failed to submit QR Code data: {e}")
-            
+
     def stream_socket(self):
         """Gửi ảnh liên tục qua TCP socket dưới dạng length-prefixed JPEG."""
         try:
@@ -1052,8 +1065,11 @@ def main():
     try:
         controller = JetBotController()
         controller.run()
-    except rospy.ROSInterruptException: rospy.loginfo("Node đã bị ngắt.")
-    except Exception as e: rospy.logerr(f"Lỗi không xác định: {e}", exc_info=True)
+    except rospy.ROSInterruptException:
+        rospy.loginfo("Node đã bị ngắt.")
+    except Exception as e:
+        rospy.logerr(f"Lỗi không xác định: {e}", exc_info=True)
+
 
 if __name__ == '__main__':
     main()
