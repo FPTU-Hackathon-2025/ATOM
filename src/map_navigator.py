@@ -32,13 +32,13 @@ class MapNavigator:
     #  thì truyền tham số map_type khác nhau (a, b, c)
     def _load_map(self, map_type):
         try:
-            
-              
+
+
             # with open("./map.json", "r", encoding="utf-8") as f:
             #     data = json.load(f)
             # if not data:
             #     raise ValueError("No data found in the API response.")
-          
+
             # URL: /api/maps/get_active_map/?token=[Team’s
             # Token]&map_type=[Map type]
             # Method: GET
@@ -52,8 +52,8 @@ class MapNavigator:
             response.raise_for_status()  # Raise error for non-200 status codes
 
             data = response.json()
-            
-          
+
+
 
             for node in data['nodes']:
                 self.nodes_data[node['id']] = node
@@ -90,7 +90,7 @@ class MapNavigator:
         """
         Tìm đường đi từ start -> tất cả các load nodes (nếu có) -> end bằng A* liên tục.
         Không quay lại node vừa đi.
-        
+
         :param start_node_id: ID của node bắt đầu.
         :param end_node_id: ID của node kết thúc.
         :param banned_edges: List các cạnh (u, v) bị cấm, dùng để tìm đường lại.
@@ -100,7 +100,12 @@ class MapNavigator:
         graph_to_search = self.graph.copy()
         if banned_edges:
             graph_to_search.remove_edges_from(banned_edges)
-        
+
+        # TODO: BACKUP: nếu không tìm được đường đi qua tất cả load nodes
+        # thì tìm đường thẳng từ start -> end
+        # (giúp robot không bị kẹt nếu load node không thể đến được)
+        # load_nodes = None
+
         # Lấy danh sách load nodes
         load_nodes = {n for n, d in self.nodes_data.items() if d["type"].lower() == "load"}
 

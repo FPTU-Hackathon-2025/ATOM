@@ -832,21 +832,42 @@ class JetBotController:
 
         # 2. Xử lý các mục dữ liệu (QR, Toán) và Publish
         rospy.loginfo("[STEP 2] Processing data items...")
-        for item in data_items:
-            if item['class_name'] == 'qr_code':
-                rospy.loginfo("Found QR Code. Publishing data...")
-                # TODO: thay text và node_id bằng dữ liệu thực tế
-                body = {
-                    "text": "QR Code",
-                    "node_id": self.current_node_id,
-                    "token": token,
-                    "map_type": map_type
-                }
-                self.publish_data(body)
-            elif item['class_name'] == 'math_problem':
-                rospy.loginfo("Found Math Problem. Solving and publishing...")
-                self.publish_data({'type': 'MATH_PROBLEM', 'value': '2+2=4'})
+        if len(data_items) > 1:
+            finalText = '_'.join(sorted(data.upper() for data in data_items))
+        else:
+            finalText = data_items[0].upper()
+        if finalText == 'QR_CODE':
+            rospy.loginfo("Found QR Code. Publishing data...")
+            # TODO: thay text và node_id bằng dữ liệu thực tế
+            body = {
+                "text": "QR Code",
+                "node_id": self.current_node_id,
+                "token": token,
+                "map_type": map_type
+            }
+        elif finalText == 'MATH_PROBLEM' or finalText == 'MATH':
+            rospy.loginfo("Found Math Problem. Solving and publishing...")
+            # TODO: Giải toán và thay text bằng kết quả thực tế
+            body = {
+                "text": "1",
+                "node_id": self.current_node_id,
+                "token": token,
+                "map_type": map_type
+            }
+        else:
+            rospy.loginfo("Found Object Image. Publishing data...")
+            body = {
+                "text": finalText,
+                "node_id": self.current_node_id,
+                "token": token,
+                "map_type": map_type
+            }
 
+        try:
+            self.publish_data(body)
+            rospy.loginfo(f"Published data for {finalText}.")
+        except Exception as e:
+            rospy.logerr(f"Failed to publish data for {finalText}: {e}")
 
         rospy.loginfo("[STEP 3] Lập kế hoạch điều hướng theo bản đồ...")
         # 3. Lập kế hoạch Điều hướng

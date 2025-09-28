@@ -28,7 +28,7 @@ from map_navigator import MapNavigator
 DOMAIN = "https://hackathon2025-dev.fpt.edu.vn"
 token = "7437f6b784f59029d38b71799c713c72"
 url = f"{DOMAIN}/api/sign-submissions/submit/"
-map_type = "map_z" # TODO: khi deploy đổi qua map_a
+map_type = "map_a"
 
 class RobotState(Enum):
     WAITING_FOR_LINE = 0
@@ -803,17 +803,16 @@ class JetBotController:
         detections = self.detect_with_yolo(image_info)
         self.turn_robot(-angle_to_sign, False)
 
-        boxes = detections['boxes']
-        prescriptive_cmds = {det['class_name'] for det in boxes if det['class_name'] in self.PRESCRIPTIVE_SIGNS}
-        prohibitive_cmds = {det['class_name'] for det in boxes if det['class_name'] in self.PROHIBITIVE_SIGNS}
-        data_items = [det for det in boxes if det['class_name'] in self.DATA_ITEMS]
+        prescriptive_cmds = {det['class_name'] for det in detections if det['class_name'] in self.PRESCRIPTIVE_SIGNS}
+        prohibitive_cmds = {det['class_name'] for det in detections if det['class_name'] in self.PROHIBITIVE_SIGNS}
+        data_items = [det for det in detections if det['class_name'] in self.DATA_ITEMS]
 
         # 2. Xử lý các mục dữ liệu (QR, Toán) và Publish
         rospy.loginfo("[STEP 2] Processing data items...")
         if len(data_items) > 1:
-            finalText = '_'.join(sorted([box['class_name'].upper() for box in data_items]))
+            finalText = '_'.join(sorted(data.upper() for data in data_items))
         else:
-            finalText = boxes[0]['class_name'].upper()
+            finalText = data_items[0].upper()
         if finalText == 'QR_CODE':
             rospy.loginfo("Found QR Code. Publishing data...")
             # TODO: thay text và node_id bằng dữ liệu thực tế
