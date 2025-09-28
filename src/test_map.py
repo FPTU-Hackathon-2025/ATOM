@@ -1,8 +1,8 @@
 from map_navigator import MapNavigator
 
-def main():
+def main(map_type):
     # Load map từ file JSON (bạn lưu JSON thành map.json)
-    nav = MapNavigator("map.json")
+    nav = MapNavigator(map_type)
 
     # Tìm đường từ node start -> end
     path = nav.find_path(nav.start_node, nav.end_node)
@@ -20,4 +20,5 @@ def main():
         print("Không tìm thấy đường đi!")
 
 if __name__ == "__main__":
-    main()
+    map_type = "map_z"
+    main(map_type)
